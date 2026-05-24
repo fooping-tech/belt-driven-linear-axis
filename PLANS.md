@@ -55,7 +55,7 @@ include/
 ### MotionController
 
 - 通常移動を担当する。
-- `moveToMm`、`moveRelativeMm`、ソフトリミット確認を担当する。
+- `moveToMm`、`moveRelativeMm`、速度指定移動、ソフトリミット確認を担当する。
 - 将来、台形加減速を入れられるようにする。
 
 ### AppController
@@ -104,6 +104,7 @@ Idle
 
 - home 完了前の通常移動は禁止。
 - ソフトリミットを超える移動は禁止。
+- 任意距離・任意速度のテスト移動も通常移動と同じ安全制約を使う。
 - リミット ON 時は安全停止する。
 - 通電中にモータ線を抜かない。
 - GND 共通を必須とする。
@@ -114,14 +115,17 @@ Idle
 - 20T プーリー。
 - 1 回転 40 mm。
 - NEMA17 1.8 deg。
-- 1/16 microstep。
+- TMC2209 UARTで 1/16 microstepへ設定する。
 - steps/mm = 80。
+- `STEPS_PER_MM` は `MOTOR_FULL_STEPS_PER_REV * MICROSTEPS / PULLEY_TRAVEL_MM_PER_REV` から導出する。
 - X_MIN_MM = 0.0。
 - RAIL_LENGTH_MM = 100.0。
 - CARRIAGE_LENGTH_MM = 40.0。
 - END_MARGIN_MM = 5.0。
 - X_MAX_TRAVEL_MM = 100.0 - 40.0 - 5.0 = 55.0。
 - X_MAX_MM = 55.0 初期値。
+- TEST_MOVE_MIN_SPEED_MM_S = 0.1。
+- TEST_MOVE_MAX_SPEED_MM_S = 50.0。
 
 ## 8. 今後の実装計画
 
@@ -137,6 +141,10 @@ Idle
 - [x] 10mm 移動テストを行う。
 - [ ] 50mm 移動テストを行う。
 - [ ] ソフトリミットを検証する。
+- [x] 任意距離・任意速度のテスト移動コマンドを実装する。
+- [ ] `m 10 5`、`m -5 2.5`、範囲外速度、home前拒否を検証する。
+- [x] TMC2209 UARTで1/16 microstep設定を実装する。
+- [ ] UART接続OK時に10mm指令が10mmになることを検証する。
 - [x] README を更新する。
 - [ ] TMC2209 UART 対応を次フェーズで検討する。
 

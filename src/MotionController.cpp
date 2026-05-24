@@ -23,8 +23,18 @@ bool MotionController::moveToMm(float targetMm) {
   return true;
 }
 
+bool MotionController::moveToMm(float targetMm, float speedMmS) {
+  speedMmS_ = speedMmS;
+  return moveToMm(targetMm);
+}
+
 bool MotionController::moveRelativeMm(float deltaMm) {
   return moveToMm(axis_.currentPositionMm() + deltaMm);
+}
+
+bool MotionController::moveRelativeMm(float deltaMm, float speedMmS) {
+  speedMmS_ = speedMmS;
+  return moveRelativeMm(deltaMm);
 }
 
 void MotionController::update() {
@@ -83,6 +93,10 @@ float MotionController::targetMm() const {
   return static_cast<float>(targetSteps_) / axis_.stepsPerMm();
 }
 
+float MotionController::speedMmS() const {
+  return speedMmS_;
+}
+
 bool MotionController::stepDue() {
   const float stepsPerSecond = speedMmS_ * axis_.stepsPerMm();
   if (stepsPerSecond <= 0.0F) {
@@ -99,4 +113,3 @@ bool MotionController::stepDue() {
   lastStepUs_ = nowUs;
   return true;
 }
-

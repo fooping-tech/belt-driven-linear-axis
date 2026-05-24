@@ -1,6 +1,6 @@
 # Belt Driven Linear Axis
 
-M5Atom S3 と A4988 STEP/DIR ドライバで、GT2 ベルト駆動の 1 軸リニア機構を動かす PlatformIO プロジェクトです。
+M5Atom S3 と TMC2209 STEP/DIR ドライバで、GT2 ベルト駆動の 1 軸リニア機構を動かす PlatformIO プロジェクトです。
 起動直後は `NotHomed` になり、ホーミング完了後だけ通常移動できます。
 
 ## ソフトウェア構成
@@ -40,16 +40,16 @@ GPIO 操作は `StepDirDriver` と `LimitSwitch` に閉じ込め、ホーミン�
 ## 配線
 
 ```text
-ATOM S3                         A4988
+ATOM S3                         TMC2209
 
 3.3V  ------------------------  VDD
 GND   ------------------------  GND
 G5    ------------------------  STEP
 G6    ------------------------  DIR
+G1 / TX -- 1kΩ ---------------  PDN_UART
+G2 / RX ----------------------  PDN_UART
 
                                 ENABLE ---- GND
-                                SLEEP  ---- 3.3V
-                                RESET  ---- 3.3V
 
 12V電源 + --------------------  VBB / VMOT
 12V電源 - --------------------  GND
@@ -58,13 +58,15 @@ G6    ------------------------  DIR
 モータ コイルB ---------------  OUT2A / OUT2B
 ```
 
-| ATOM S3 | A4988 |
+| ATOM S3 | TMC2209 |
 | --- | --- |
 | G5 / GPIO5 | STEP |
 | G6 / GPIO6 | DIR |
+| G1 / GPIO1 | UART TX -> 1kΩ -> PDN_UART |
+| G2 / GPIO2 | UART RX <- PDN_UART |
 | GND | GND |
 
-ATOM S3 と A4988 の GND は必ず共通にしてください。
+ATOM S3 と TMC2209 の GND は必ず共通にしてください。
 通電中にモータ線を抜かないでください。
 
 この個体では `include/config.h` の `DIR_INVERTED = true` で、`HOMING_DIRECTION = -1` が X-min リミットへ向かう方向になります。
@@ -145,7 +147,7 @@ X_MAX_MM = 55.0
 ```
 
 home 完了前の通常移動は禁止です。
-home 完了後も、ソフトリミットを超える `10mm` / `50mm` 移動は拒否されます。
+home 完了後も、ソフトリミットを超える移動は拒否されます。
 通常移動中にリミット方向へ進んでリミット ON を検出した場合は安全停止して `Error` になります。
 
 ## 操作
@@ -163,14 +165,17 @@ Serial コマンド:
 | `5` | +50 mm 移動 |
 | `b` | -10 mm 移動 |
 | `s` | status 表示 |
+| `m <mm> <mm/s>` | 任意距離を任意速度で相対移動 |
 
 10 mm 往復テストは `h` の後に `1` と `b` を送ります。
 50 mm テストは `h` の後に `5` を送ります。
+任意距離・任意速度のテストは `h` の後に `m 10 5` や `m -5 2.5` を送ります。
+`m` コマンドは home 完了後だけ使えます。速度範囲は `TEST_MOVE_MIN_SPEED_MM_S` から `TEST_MOVE_MAX_SPEED_MM_S` までで、初期値は `0.1..50.0 mm/s` です。
 現在状態、位置、リミット状態、homed 状態は Serial ログと本体画面で確認できます。
 
 ## 機械パラメータ
 
-GT2 20T 前提です。
+GT2 20T 前提です。TMC2209 は起動時にUARTで 1/16 microstepへ設定します。
 
 ```text
 GT2 pitch: 2 mm
@@ -180,6 +185,10 @@ Motor: NEMA17 1.8 deg, 200 full steps/rev
 Microstep: 1/16, 3200 steps/rev
 steps/mm: 3200 / 40 = 80
 ```
+
+UART接続が失敗するとTMC2209側の既定マイクロステップのまま動くため、Serialログまたは `s` コマンドで `tmc2209_uart=OK` を確認してください。
+`tmc2209_uart=FAIL` の場合、microstep設定が検証できないため homing と通常移動は拒否されます。
+実測で校正する場合は `new_steps_per_mm = old_steps_per_mm * commanded_mm / measured_mm` で計算します。
 
 ## ビルドとアップロード
 

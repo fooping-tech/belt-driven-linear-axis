@@ -15,7 +15,9 @@ class MotionController {
   MotionController(Axis& axis, float speedMmS);
 
   bool moveToMm(float targetMm);
+  bool moveToMm(float targetMm, float speedMmS);
   bool moveRelativeMm(float deltaMm);
+  bool moveRelativeMm(float deltaMm, float speedMmS);
   void update();
   void stop();
   bool isMoving() const;
@@ -23,6 +25,7 @@ class MotionController {
   State state() const;
   const char* stateName() const;
   float targetMm() const;
+  float speedMmS() const;
 
  private:
   bool stepDue();
@@ -34,4 +37,3 @@ class MotionController {
   State state_ = State::Idle;
   uint32_t lastStepUs_ = 0;
 };
-

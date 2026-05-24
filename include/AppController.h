@@ -29,8 +29,14 @@ class AppController {
  private:
   void handleButton();
   void handleSerial();
+  void processSerialLine(const String& line);
+  void initDriverUart();
   void startHoming();
   void startMoveRelative(float mm);
+  void startMoveRelative(float mm, float speedMmS);
+  bool parseMoveCommand(const String& line, float& distanceMm, float& speedMmS) const;
+  bool validateMoveRequest(float distanceMm, float speedMmS) const;
+  void printMoveUsage() const;
   void updateState();
   void printStatus();
   void drawStatus();
@@ -46,4 +52,5 @@ class AppController {
   uint32_t pressStartedMs_ = 0;
   uint32_t lastDisplayMs_ = 0;
   HomingController::State lastHomingLogState_ = HomingController::State::Idle;
+  String serialLine_;
 };
