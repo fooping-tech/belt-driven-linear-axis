@@ -116,12 +116,13 @@ Idle
 
 1. `HOMING_FAST_MM_S` でリミット方向へ移動します。
 2. リミット ON で停止します。
-3. `HOMING_BACKOFF_MM` だけ反対方向へ戻ります。
+3. リミットがOFFになるまで反対方向へ戻ります。
 4. `HOMING_SLOW_MM_S` でもう一度リミット方向へ移動します。
 5. リミット ON 位置を `X=0.00 mm` にします。
 6. `Ready` になり、通常移動が許可されます。
 
-`HOMING_MAX_TRAVEL_MM` 以内にリミットへ当たらない場合、または backoff 後もスイッチが離れない場合は `Error` になります。
+`HOMING_MAX_TRAVEL_MM` 以内にリミットへ当たらない場合、または `HOMING_BACKOFF_MM` 戻ってもスイッチが離れない場合は `Error` になります。
+起動時点でリミットスイッチがONでも、まずbackoffしてスイッチを離してから低速seekへ進みます。
 
 実機確認では次の状態遷移を Serial ログで確認しています。
 

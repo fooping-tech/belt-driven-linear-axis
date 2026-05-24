@@ -35,13 +35,13 @@ void HomingController::update() {
       return;
 
     case State::Backoff:
+      if (!axis_.isLimitPressed()) {
+        travelSteps_ = 0;
+        state_ = State::SeekSlow;
+        return;
+      }
       if (backoffSteps_ >= mmToSteps(config_.backoffMm)) {
-        if (axis_.isLimitPressed()) {
-          markError();
-        } else {
-          travelSteps_ = 0;
-          state_ = State::SeekSlow;
-        }
+        markError();
         return;
       }
       if (stepDue(config_.fastSpeedMmS) && axis_.moveOneStepForHoming(-config_.direction)) {
