@@ -211,8 +211,11 @@ void AppController::handleSerial() {
           return;
         case 's':
         case 'S':
-          printStatus();
-          return;
+          if (Serial.available() == 0) {
+            printStatus();
+            return;
+          }
+          break;
       }
     }
 
@@ -267,6 +270,14 @@ void AppController::processSerialLine(const String& line) {
     return;
   }
 
+  String command = trimmed;
+  command.toLowerCase();
+
+  if (command == "s") {
+    printStatus();
+    return;
+  }
+
   if (trimmed.startsWith("m") || trimmed.startsWith("M")) {
     float distanceMm = 0.0F;
     float speedMmS = 0.0F;
@@ -275,6 +286,20 @@ void AppController::processSerialLine(const String& line) {
       return;
     }
     startMoveRelative(distanceMm, speedMmS);
+    return;
+  }
+
+  if (command.startsWith("v") || command.startsWith("speed")) {
+    float speedMmS = 0.0F;
+    if (!parseSpeedCommand(trimmed, speedMmS) || !validateMoveSpeed(speedMmS)) {
+      Serial.printf("Usage: v <speed_mm_s>, speed range %.2f..%.2f mm/s\n",
+                    TEST_MOVE_MIN_SPEED_MM_S,
+                    TEST_MOVE_MAX_SPEED_MM_S);
+      return;
+    }
+
+    defaultMoveSpeedMmS_ = speedMmS;
+    Serial.printf("Default move speed set: %.2f mm/s\n", defaultMoveSpeedMmS_);
     return;
   }
 
@@ -288,7 +313,45 @@ void AppController::processSerialLine(const String& line) {
     return;
   }
 
-  Serial.printf("Unknown command '%s'. Use h, 1, 5, b, s, on, off, or m <mm> <mm/s>.\n", trimmed.c_str());
+  Serial.printf("Unknown command '%s'. Use h, 1, 5, b, s, on, off, v <mm/s>, or m <mm> [mm/s].\n", trimmed.c_str());
+}
+
+bool AppController::parseSpeedCommand(const String& line, float& speedMmS) const {
+  String command = line;
+  command.toLowerCase();
+
+  String args;
+  if (command.startsWith("speed")) {
+    args = line.substring(5);
+  } else {
+    args = line.substring(1);
+  }
+
+  args.trim();
+  if (args.length() == 0 || args.length() >= 32) {
+    return false;
+  }
+
+  char buffer[32];
+  args.toCharArray(buffer, sizeof(buffer));
+
+  char* cursor = buffer;
+  while (isspace(static_cast<unsigned char>(*cursor))) {
+    ++cursor;
+  }
+
+  char* end = nullptr;
+  speedMmS = strtof(cursor, &end);
+  if (end == cursor) {
+    return false;
+  }
+
+  cursor = end;
+  while (isspace(static_cast<unsigned char>(*cursor))) {
+    ++cursor;
+  }
+
+  return *cursor == '\0';
 }
 
 bool AppController::parseMoveCommand(const String& line, float& distanceMm, float& speedMmS) const {
@@ -317,6 +380,11 @@ bool AppController::parseMoveCommand(const String& line, float& distanceMm, floa
     ++cursor;
   }
 
+  if (*cursor == '\0') {
+    speedMmS = defaultMoveSpeedMmS_;
+    return true;
+  }
+
   speedMmS = strtof(cursor, &end);
   if (end == cursor) {
     return false;
@@ -328,6 +396,23 @@ bool AppController::parseMoveCommand(const String& line, float& distanceMm, floa
   }
 
   return *cursor == '\0';
+}
+
+bool AppController::validateMoveSpeed(float speedMmS) const {
+  if (!isfinite(speedMmS)) {
+    Serial.println("Speed rejected: speed must be a finite number");
+    return false;
+  }
+
+  if (speedMmS < TEST_MOVE_MIN_SPEED_MM_S || speedMmS > TEST_MOVE_MAX_SPEED_MM_S) {
+    Serial.printf("Speed rejected: %.2f mm/s is outside %.2f..%.2f mm/s\n",
+                  speedMmS,
+                  TEST_MOVE_MIN_SPEED_MM_S,
+                  TEST_MOVE_MAX_SPEED_MM_S);
+    return false;
+  }
+
+  return true;
 }
 
 bool AppController::validateMoveRequest(float distanceMm, float speedMmS) const {
@@ -350,11 +435,7 @@ bool AppController::validateMoveRequest(float distanceMm, float speedMmS) const 
     return false;
   }
 
-  if (speedMmS < TEST_MOVE_MIN_SPEED_MM_S || speedMmS > TEST_MOVE_MAX_SPEED_MM_S) {
-    Serial.printf("Move rejected: speed %.2f mm/s is outside %.2f..%.2f mm/s\n",
-                  speedMmS,
-                  TEST_MOVE_MIN_SPEED_MM_S,
-                  TEST_MOVE_MAX_SPEED_MM_S);
+  if (!validateMoveSpeed(speedMmS)) {
     printMoveUsage();
     return false;
   }
@@ -374,9 +455,10 @@ bool AppController::validateMoveRequest(float distanceMm, float speedMmS) const 
 }
 
 void AppController::printMoveUsage() const {
-  Serial.printf("Usage: m <distance_mm> <speed_mm_s>, speed range %.2f..%.2f mm/s\n",
+  Serial.printf("Usage: m <distance_mm> [speed_mm_s], v <speed_mm_s>, speed range %.2f..%.2f mm/s, default %.2f mm/s\n",
                 TEST_MOVE_MIN_SPEED_MM_S,
-                TEST_MOVE_MAX_SPEED_MM_S);
+                TEST_MOVE_MAX_SPEED_MM_S,
+                defaultMoveSpeedMmS_);
 }
 
 void AppController::setMotorPower(bool enabled) {
@@ -443,7 +525,7 @@ void AppController::startHoming() {
 }
 
 void AppController::startMoveRelative(float mm) {
-  startMoveRelative(mm, DEFAULT_MOVE_SPEED_MM_S);
+  startMoveRelative(mm, defaultMoveSpeedMmS_);
 }
 
 void AppController::startMoveRelative(float mm, float speedMmS) {
@@ -527,13 +609,14 @@ void AppController::printStatus() {
   const uint8_t connectionResult = refreshTmcUartStatus();
 #endif
 
-  Serial.printf("state=%s homing=%s motion=%s pos=%.2fmm steps=%ld speed=%.2fmm/s homed=%s limitRaw=%s limitDebounced=%s\n",
+  Serial.printf("state=%s homing=%s motion=%s pos=%.2fmm steps=%ld speed=%.2fmm/s defaultSpeed=%.2fmm/s homed=%s limitRaw=%s limitDebounced=%s\n",
                 stateName(),
                 homing_.stateName(),
                 motion_.stateName(),
                 axis_.currentPositionMm(),
                 axis_.currentPositionSteps(),
                 motion_.speedMmS(),
+                defaultMoveSpeedMmS_,
                 axis_.isHomed() ? "true" : "false",
                 limit_.isPressedRaw() ? "ON" : "OFF",
                 limit_.isPressedDebounced() ? "ON" : "OFF");
@@ -580,10 +663,10 @@ void AppController::drawStatus() {
   M5.Display.drawString(String("State: ") + stateName(), M5.Display.width() / 2, 34);
   M5.Display.drawString(String("Home: ") + homing_.stateName(), M5.Display.width() / 2, 50);
   M5.Display.drawString(String("X: ") + String(axis_.currentPositionMm(), 2) + " mm", M5.Display.width() / 2, 66);
-  M5.Display.drawString(String("Speed: ") + String(motion_.speedMmS(), 1) + " mm/s", M5.Display.width() / 2, 82);
+  M5.Display.drawString(String("Default: ") + String(defaultMoveSpeedMmS_, 1) + " mm/s", M5.Display.width() / 2, 82);
   M5.Display.drawString(String("Limit: ") + (limit_.isPressedDebounced() ? "ON" : "OFF"), M5.Display.width() / 2, 98);
 
-  const char* footer = "Serial: m mm speed";
+  const char* footer = "Serial: v speed";
   if (state_ == State::NotHomed) {
     footer = "Long press: home";
   } else if (state_ == State::Error) {

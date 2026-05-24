@@ -52,5 +52,5 @@ constexpr float HOMING_MAX_TRAVEL_MM = 80.0F;
 
 constexpr float DEFAULT_MOVE_SPEED_MM_S = 10.0F;
 constexpr float TEST_MOVE_MIN_SPEED_MM_S = 0.1F;
-constexpr float TEST_MOVE_MAX_SPEED_MM_S = 50.0F;
+constexpr float TEST_MOVE_MAX_SPEED_MM_S = 200.0F;
 constexpr uint32_t BUTTON_LONG_PRESS_MS = 700;

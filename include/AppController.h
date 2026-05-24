@@ -35,7 +35,9 @@ class AppController {
   void startHoming();
   void startMoveRelative(float mm);
   void startMoveRelative(float mm, float speedMmS);
+  bool parseSpeedCommand(const String& line, float& speedMmS) const;
   bool parseMoveCommand(const String& line, float& distanceMm, float& speedMmS) const;
+  bool validateMoveSpeed(float speedMmS) const;
   bool validateMoveRequest(float distanceMm, float speedMmS) const;
   void printMoveUsage() const;
   void updateState();
@@ -50,6 +52,7 @@ class AppController {
   MotionController motion_;
   State state_ = State::Boot;
   bool motorPowerEnabled_ = true;
+  float defaultMoveSpeedMmS_ = DEFAULT_MOVE_SPEED_MM_S;
   bool wasPressed_ = false;
   uint32_t pressStartedMs_ = 0;
   uint32_t lastDisplayMs_ = 0;
