@@ -166,12 +166,15 @@ Serial コマンド:
 | `5` | +50 mm 移動 |
 | `b` | -10 mm 移動 |
 | `s` | status 表示 |
+| `off` | モータ通電OFF。TMC2209は `toff(0)` で出力段を無効化 |
+| `on` | モータ通電ON。TMC2209設定を再適用 |
 | `m <mm> <mm/s>` | 任意距離を任意速度で相対移動 |
 
 10 mm 往復テストは `h` の後に `1` と `b` を送ります。
 50 mm テストは `h` の後に `5` を送ります。
 任意距離・任意速度のテストは `h` の後に `m 10 5` や `m -5 2.5` を送ります。
 `m` コマンドは home 完了後だけ使えます。速度範囲は `TEST_MOVE_MIN_SPEED_MM_S` から `TEST_MOVE_MAX_SPEED_MM_S` までで、初期値は `0.1..50.0 mm/s` です。
+`off` 後は位置保持が信用できないため `homed=false` に戻ります。`on` 後に再度 `h` でホーミングしてください。
 現在状態、位置、リミット状態、homed 状態は Serial ログと本体画面で確認できます。
 
 ## 機械パラメータ
@@ -189,6 +192,12 @@ steps/mm: 3200 / 40 = 80
 
 UART接続が失敗するとTMC2209側の既定マイクロステップのまま動くため、Serialログまたは `s` コマンドで `tmc2209_uart=OK` を確認してください。
 `tmc2209_uart=FAIL` の場合、microstep設定が検証できないため homing と通常移動は拒否されます。
+電流設定は `TMC_RMS_CURRENT_MA` と `TMC_HOLD_MULTIPLIER` から `IRUN` / `IHOLD` を計算し、UARTで直接レジスタへ書き込みます。
+`TMC_TPOWERDOWN` 後に `IHOLD` 側へ移行します。
+起動直後はTMC2209がUART設定を取りこぼす場合があるため、`TMC_STARTUP_REAPPLY_DELAY_MS` 待ってから同じ設定を再適用します。
+さらに `StepDirDriver` 有効化後にも再適用し、起動直後から `on` コマンド後と同じ設定状態にします。
+`s` コマンドで `targetHold`, `irun`, `ihold`, `vsense`, `estimatedRun`, `estimatedHold`, `reportedRms`, `csActual`, `ifcnt` を確認できます。
+`ifcnt` はTMC2209が受信したUART書き込み数を示すカウンタです。
 実測で校正する場合は `new_steps_per_mm = old_steps_per_mm * commanded_mm / measured_mm` で計算します。
 
 ## ビルドとアップロード

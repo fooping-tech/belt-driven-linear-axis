@@ -31,6 +31,7 @@ class AppController {
   void handleSerial();
   void processSerialLine(const String& line);
   void initDriverUart();
+  void setMotorPower(bool enabled);
   void startHoming();
   void startMoveRelative(float mm);
   void startMoveRelative(float mm, float speedMmS);
@@ -48,6 +49,7 @@ class AppController {
   HomingController homing_;
   MotionController motion_;
   State state_ = State::Boot;
+  bool motorPowerEnabled_ = true;
   bool wasPressed_ = false;
   uint32_t pressStartedMs_ = 0;
   uint32_t lastDisplayMs_ = 0;

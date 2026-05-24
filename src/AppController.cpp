@@ -23,11 +23,45 @@ HardwareSerial TmcSerial(1);
 TMC2209Stepper TmcDriver(&TmcSerial, TMC_R_SENSE, TMC_DRIVER_ADDRESS);
 bool tmcUartOk = false;
 uint8_t tmcUartAddress = TMC_DRIVER_ADDRESS;
+uint8_t tmcConfiguredIrun = 0;
+uint8_t tmcConfiguredIhold = 0;
+float tmcConfiguredRunRmsMa = 0.0F;
+float tmcConfiguredHoldRmsMa = 0.0F;
 
 uint8_t refreshTmcUartStatus() {
   const uint8_t connectionResult = TmcDriver.test_connection();
   tmcUartOk = connectionResult == 0;
   return connectionResult;
+}
+
+float currentScaleToRmsMa(const uint8_t currentScale, const bool vsense) {
+  const float vfs = vsense ? 0.180F : 0.325F;
+  return (static_cast<float>(currentScale) + 1.0F) / 32.0F * vfs / (TMC_R_SENSE + 0.02F) / 1.41421F * 1000.0F;
+}
+
+uint8_t rmsMaToCurrentScale(const float rmsMa, const bool vsense) {
+  const float vfs = vsense ? 0.180F : 0.325F;
+  long currentScale = lroundf(32.0F * 1.41421F * rmsMa / 1000.0F * (TMC_R_SENSE + 0.02F) / vfs - 1.0F);
+  if (currentScale < 0) {
+    currentScale = 0;
+  }
+  if (currentScale > 31) {
+    currentScale = 31;
+  }
+  return static_cast<uint8_t>(currentScale);
+}
+
+void applyTmc2209Current(TMC2209Stepper& driver) {
+  const float targetHoldRmsMa = static_cast<float>(TMC_RMS_CURRENT_MA) * TMC_HOLD_MULTIPLIER;
+  tmcConfiguredIrun = rmsMaToCurrentScale(static_cast<float>(TMC_RMS_CURRENT_MA), TMC_CURRENT_VSENSE);
+  tmcConfiguredIhold = rmsMaToCurrentScale(targetHoldRmsMa, TMC_CURRENT_VSENSE);
+  tmcConfiguredRunRmsMa = currentScaleToRmsMa(tmcConfiguredIrun, TMC_CURRENT_VSENSE);
+  tmcConfiguredHoldRmsMa = currentScaleToRmsMa(tmcConfiguredIhold, TMC_CURRENT_VSENSE);
+
+  driver.vsense(TMC_CURRENT_VSENSE);
+  driver.irun(tmcConfiguredIrun);
+  driver.ihold(tmcConfiguredIhold);
+  driver.iholddelay(TMC_IHOLDDELAY);
 }
 
 void applyTmc2209Config(TMC2209Stepper& driver) {
@@ -37,9 +71,7 @@ void applyTmc2209Config(TMC2209Stepper& driver) {
   driver.pdn_disable(true);
   driver.mstep_reg_select(true);
   driver.multistep_filt(true);
-
-  driver.rms_current(TMC_RMS_CURRENT_MA);
-  driver.hold_multiplier(TMC_HOLD_MULTIPLIER);
+  driver.TPOWERDOWN(TMC_TPOWERDOWN);
 
   driver.toff(5);
   driver.hstrt(5);
@@ -51,6 +83,26 @@ void applyTmc2209Config(TMC2209Stepper& driver) {
   driver.en_spreadCycle(false);
   driver.pwm_autoscale(true);
   driver.pwm_autograd(false);
+
+  // Apply current last because CHOPCONF writes can otherwise overwrite vsense.
+  applyTmc2209Current(driver);
+}
+
+void printTmc2209CurrentStatus(const char* label) {
+  Serial.printf("TMC2209 current %s: target_run=%.0f mA target_hold=%.0f mA irun=%u ihold=%u iholddelay=%u vsense=%u estimated_run=%.0f mA estimated_hold=%.0f mA reported_rms=%u mA cs_actual=%u tpowerdown=%u ifcnt=%u\n",
+                label,
+                static_cast<float>(TMC_RMS_CURRENT_MA),
+                static_cast<float>(TMC_RMS_CURRENT_MA) * TMC_HOLD_MULTIPLIER,
+                TmcDriver.irun(),
+                TmcDriver.ihold(),
+                TmcDriver.iholddelay(),
+                TmcDriver.vsense() ? 1 : 0,
+                tmcConfiguredRunRmsMa,
+                tmcConfiguredHoldRmsMa,
+                TmcDriver.rms_current(),
+                TmcDriver.cs_actual(),
+                TMC_TPOWERDOWN,
+                TmcDriver.IFCNT());
 }
 #endif
 }
@@ -73,6 +125,15 @@ void AppController::begin() {
   limit_.begin();
   axis_.begin();
   axis_.setSoftLimits(X_MIN_MM, X_MAX_MM);
+
+#if ACTIVE_DRIVER == DRIVER_TMC2209
+  delay(TMC_STARTUP_REAPPLY_DELAY_MS);
+  Serial.printf("Reapplying TMC2209 config after StepDirDriver enable, delay=%lu ms\n",
+                TMC_STARTUP_REAPPLY_DELAY_MS);
+  applyTmc2209Config(TmcDriver);
+  refreshTmcUartStatus();
+  printTmc2209CurrentStatus("after step driver enable");
+#endif
 
   M5.Display.setRotation(0);
   state_ = State::NotHomed;
@@ -173,7 +234,16 @@ void AppController::initDriverUart() {
                 TMC_R_SENSE);
 
   TmcDriver.begin();
+  Serial.println("Applying TMC2209 startup config: pass 1");
   applyTmc2209Config(TmcDriver);
+  printTmc2209CurrentStatus("after pass 1");
+
+  delay(TMC_STARTUP_REAPPLY_DELAY_MS);
+  Serial.printf("Reapplying TMC2209 startup config after %lu ms: pass 2\n",
+                TMC_STARTUP_REAPPLY_DELAY_MS);
+  applyTmc2209Config(TmcDriver);
+  printTmc2209CurrentStatus("after pass 2");
+
   const uint8_t connectionResult = TmcDriver.test_connection();
   tmcUartOk = connectionResult == 0;
 
@@ -184,6 +254,7 @@ void AppController::initDriverUart() {
                 MICROSTEPS,
                 STEPS_PER_MM,
                 TMC_RMS_CURRENT_MA);
+  printTmc2209CurrentStatus("startup final");
 #else
   Serial.println("A4988 mode: TMC2209 UART initialization skipped");
 #endif
@@ -207,7 +278,17 @@ void AppController::processSerialLine(const String& line) {
     return;
   }
 
-  Serial.printf("Unknown command '%s'. Use h, 1, 5, b, s, or m <mm> <mm/s>.\n", trimmed.c_str());
+  if (trimmed.equalsIgnoreCase("on") || trimmed.equalsIgnoreCase("enable")) {
+    setMotorPower(true);
+    return;
+  }
+
+  if (trimmed.equalsIgnoreCase("off") || trimmed.equalsIgnoreCase("disable")) {
+    setMotorPower(false);
+    return;
+  }
+
+  Serial.printf("Unknown command '%s'. Use h, 1, 5, b, s, on, off, or m <mm> <mm/s>.\n", trimmed.c_str());
 }
 
 bool AppController::parseMoveCommand(const String& line, float& distanceMm, float& speedMmS) const {
@@ -250,6 +331,11 @@ bool AppController::parseMoveCommand(const String& line, float& distanceMm, floa
 }
 
 bool AppController::validateMoveRequest(float distanceMm, float speedMmS) const {
+  if (!motorPowerEnabled_) {
+    Serial.println("Move rejected: motor power is OFF. Send 'on' first, then home again.");
+    return false;
+  }
+
 #if ACTIVE_DRIVER == DRIVER_TMC2209
   refreshTmcUartStatus();
   if (!tmcUartOk) {
@@ -293,7 +379,42 @@ void AppController::printMoveUsage() const {
                 TEST_MOVE_MAX_SPEED_MM_S);
 }
 
+void AppController::setMotorPower(bool enabled) {
+  motion_.stop();
+  if (state_ == State::Homing) {
+    homing_.reset();
+  }
+
+  motorPowerEnabled_ = enabled;
+  driver_.enable(enabled);
+
+#if ACTIVE_DRIVER == DRIVER_TMC2209
+  if (enabled) {
+    applyTmc2209Config(TmcDriver);
+    refreshTmcUartStatus();
+  } else {
+    TmcDriver.toff(0);
+  }
+#endif
+
+  if (!enabled) {
+    axis_.setHomed(false);
+    state_ = State::NotHomed;
+    Serial.println("Motor power OFF: driver output disabled. Position is no longer trusted; home again after ON.");
+  } else {
+    state_ = axis_.isHomed() ? State::Ready : State::NotHomed;
+    Serial.println("Motor power ON: driver output enabled. Home before normal movement.");
+  }
+
+  printStatus();
+}
+
 void AppController::startHoming() {
+  if (!motorPowerEnabled_) {
+    Serial.println("Homing rejected: motor power is OFF. Send 'on' first.");
+    return;
+  }
+
 #if ACTIVE_DRIVER == DRIVER_TMC2209
   refreshTmcUartStatus();
   if (!tmcUartOk) {
@@ -416,6 +537,9 @@ void AppController::printStatus() {
                 axis_.isHomed() ? "true" : "false",
                 limit_.isPressedRaw() ? "ON" : "OFF",
                 limit_.isPressedDebounced() ? "ON" : "OFF");
+  Serial.printf("motorPower=%s stepDriverEnabled=%s\n",
+                motorPowerEnabled_ ? "ON" : "OFF",
+                driver_.isEnabled() ? "true" : "false");
 #if ACTIVE_DRIVER == DRIVER_TMC2209
   Serial.printf("tmc2209_uart=%s test_connection=%u microsteps=1/%u stepsPerMm=%.2f rmsCurrent=%u mA\n",
                 tmcUartOk ? "OK" : "FAIL",
@@ -427,6 +551,20 @@ void AppController::printStatus() {
                 tmcUartAddress,
                 TMC_UART_RX_PIN,
                 TMC_UART_TX_PIN);
+  Serial.printf("tmc2209_current_config=requestedRms=%u mA holdMultiplier=%.2f targetHold=%.0f mA irun=%u ihold=%u iholddelay=%u vsense=%u estimatedRun=%.0f mA estimatedHold=%.0f mA reportedRms=%u mA csActual=%u tpowerdown=%u ifcnt=%u\n",
+                TMC_RMS_CURRENT_MA,
+                TMC_HOLD_MULTIPLIER,
+                static_cast<float>(TMC_RMS_CURRENT_MA) * TMC_HOLD_MULTIPLIER,
+                TmcDriver.irun(),
+                TmcDriver.ihold(),
+                TmcDriver.iholddelay(),
+                TmcDriver.vsense() ? 1 : 0,
+                tmcConfiguredRunRmsMa,
+                tmcConfiguredHoldRmsMa,
+                TmcDriver.rms_current(),
+                TmcDriver.cs_actual(),
+                TMC_TPOWERDOWN,
+                TmcDriver.IFCNT());
 #endif
 }
 

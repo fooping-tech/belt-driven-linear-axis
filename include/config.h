@@ -21,7 +21,11 @@ constexpr uint32_t TMC_UART_BAUDRATE = 115200;
 constexpr uint8_t TMC_DRIVER_ADDRESS = 0b00;
 constexpr float TMC_R_SENSE = 0.11F;
 constexpr uint16_t TMC_RMS_CURRENT_MA = 500;
-constexpr float TMC_HOLD_MULTIPLIER = 0.50F;
+constexpr float TMC_HOLD_MULTIPLIER = 0.5F;
+constexpr bool TMC_CURRENT_VSENSE = false;
+constexpr uint8_t TMC_IHOLDDELAY = 1;
+constexpr uint8_t TMC_TPOWERDOWN = 20;
+constexpr uint32_t TMC_STARTUP_REAPPLY_DELAY_MS = 100;
 
 constexpr uint32_t SERIAL_BAUDRATE = 115200;
 constexpr uint32_t STEP_PULSE_US = 5;
