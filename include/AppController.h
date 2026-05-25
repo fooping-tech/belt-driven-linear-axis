@@ -32,12 +32,18 @@ class AppController {
   void processSerialLine(const String& line);
   void initDriverUart();
   void setMotorPower(bool enabled);
+  void setRuntimeCurrent(uint16_t currentMa);
+  void setChopMode(bool spreadCycle);
+  void setMicrosteps(uint16_t microsteps);
   void startHoming();
   void startMoveRelative(float mm);
   void startMoveRelative(float mm, float speedMmS);
   bool parseSpeedCommand(const String& line, float& speedMmS) const;
+  bool parseAccelCommand(const String& line, float& accelerationMmS2) const;
+  bool parseUnsignedCommand(const String& line, uint16_t& value) const;
   bool parseMoveCommand(const String& line, float& distanceMm, float& speedMmS) const;
   bool validateMoveSpeed(float speedMmS) const;
+  bool validateAcceleration(float accelerationMmS2) const;
   bool validateMoveRequest(float distanceMm, float speedMmS) const;
   void printMoveUsage() const;
   void updateState();

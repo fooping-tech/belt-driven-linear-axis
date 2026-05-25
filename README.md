@@ -169,6 +169,14 @@ Serial コマンド:
 | `off` | モータ通電OFF。TMC2209は `toff(0)` で出力段を無効化 |
 | `on` | モータ通電ON。TMC2209設定を再適用 |
 | `v <mm/s>` | 通常移動の既定速度を変更。`speed <mm/s>` も使用可能 |
+| `a <mm/s2>` | 台形加減速の加速度を変更。`accel <mm/s2>` も使用可能 |
+| `profile trap` | 通常移動を台形加減速で実行 |
+| `profile direct` | 通常移動を従来同等の一定周期STEPで実行 |
+| `i <mA>` | TMC2209の実行時RMS電流を変更。`current <mA>` も使用可能 |
+| `mode stealth` | TMC2209をstealthChopへ切り替え。`chop stealth` も使用可能 |
+| `mode spread` | TMC2209をspreadCycleへ切り替え。`chop spread` も使用可能 |
+| `microstep 16` | TMC2209を1/16 microstepへ切り替え。再ホーミング必須 |
+| `microstep 8` | TMC2209を1/8 microstepへ切り替え。診断用、再ホーミング必須 |
 | `m <mm>` | 任意距離を現在の既定速度で相対移動 |
 | `m <mm> <mm/s>` | 任意距離を指定速度で相対移動。この速度はその移動だけに適用 |
 
@@ -177,13 +185,76 @@ Serial コマンド:
 移動速度を変更する場合は `h` の後に `v 5` を送り、その後 `1`、`b`、`m 20` などを送ります。
 任意距離・任意速度のテストは `h` の後に `m 10 5` や `m -5 2.5` を送ります。
 `m` コマンドは home 完了後だけ使えます。`v` は次回以降の通常移動に適用され、実行中の移動速度は変更しません。
-速度範囲は `TEST_MOVE_MIN_SPEED_MM_S` から `TEST_MOVE_MAX_SPEED_MM_S` までで、初期値は `0.1..50.0 mm/s`、既定速度の初期値は `DEFAULT_MOVE_SPEED_MM_S` です。
+速度範囲は `TEST_MOVE_MIN_SPEED_MM_S` から `TEST_MOVE_MAX_SPEED_MM_S` までで、初期値は `0.1..200.0 mm/s`、既定速度の初期値は `DEFAULT_MOVE_SPEED_MM_S` です。
+加速度範囲は `TEST_ACCEL_MIN_MM_S2` から `TEST_ACCEL_MAX_MM_S2` までで、初期値は `DEFAULT_ACCELERATION_MM_S2 = 100 mm/s2` です。
+`profile trap` が既定です。`profile direct` は脱調切り分けの比較用で、移動開始直後から指定速度のSTEP周期を出します。
+`i`、`mode`、`microstep` は TMC2209 UART 接続が OK のときだけ反映されます。
+`microstep` を切り替えると `steps/mm` が変わるため、位置保持を信用せず `homed=false` に戻ります。再度 `h` でホーミングしてください。
 `off` 後は位置保持が信用できないため `homed=false` に戻ります。`on` 後に再度 `h` でホーミングしてください。
-現在状態、位置、リミット状態、homed 状態、既定速度は Serial ログと本体画面で確認できます。
+現在状態、位置、リミット状態、homed 状態、既定速度、加速度、速度プロファイル、TMC2209の電流、chop mode、microstep、steps/mm は Serial ログで確認できます。
+
+## 脱調切り分け検証
+
+指令STEPにモータロータが追従できず位置が飛ぶ場合、まず最高速度より加速、減速、反転時を疑います。
+ベルトやプーリーがズレていない前提では、加速度、TMC2209モード、電流、メカ負荷の順に切り分けます。
+
+最初の推奨手順:
+
+1. ベルトテンションを少し弱め、レールを端から端まで手で軽く動かせるか確認します。
+2. `h` でホーミングします。
+3. `profile trap`、`a 100`、`m 50 60` を実行します。
+4. NGなら `i 600` で電流を600mAへ上げ、再度 `m -50 60` または `m 50 60` を試します。
+5. まだNGなら `mode spread` でspreadCycleへ切り替えて再試験します。
+6. 60mm/sがOKになったら `a 200`、`a 300` と上げます。
+7. 60mm/sが安定したら `m 50 65`、`m -50 70` のように空走速度を上げます。
+
+判定の目安:
+
+| 結果 | 判断 |
+| --- | --- |
+| 100mm/s2ならOK | 加速度が高すぎた可能性が高い |
+| 100mm/s2でもNG | 電流、ドライバモード、メカ負荷側が濃厚 |
+| 低速でも反転時だけNG | 加減速処理または機械の反転負荷を疑う |
+| spreadCycleで改善 | stealthChopのトルク不足が濃厚 |
+| spreadCycleでもNG | 加速度、電流、メカ負荷が主因 |
+| 1/8 microstepで改善 | パルス生成周期または高周波側トルク低下の影響を疑う |
+
+速度境界は50mm/sから細かく見ます。
+`s` コマンドで各条件の `profile`、`accel`、`runtimeCurrent`、`chopMode`、`microsteps`、`stepsPerMm` を記録してください。
+
+| 速度 mm/s | 加速度 mm/s2 | 電流 | モード | 結果 |
+| --- | --- | --- | --- | --- |
+| 50 | 300 | 500mA | stealthChop | OK/NG |
+| 52 | 300 | 500mA | stealthChop | OK/NG |
+| 55 | 300 | 500mA | stealthChop | OK/NG |
+| 58 | 300 | 500mA | stealthChop | OK/NG |
+| 60 | 300 | 500mA | stealthChop | OK/NG |
+| 60 | 100 | 500mA | stealthChop | OK/NG |
+| 60 | 100 | 600mA | stealthChop | OK/NG |
+| 60 | 100 | 600mA | spreadCycle | OK/NG |
+| 65 | 100 | 600mA | spreadCycle | OK/NG |
+
+電流は一気に上げず、`i 500`、`i 600`、`i 700`、`i 800` の順に試します。
+
+| 状態 | 判断 |
+| --- | --- |
+| ほんのり温かい | OK |
+| 触れるが熱い | 要観察 |
+| 触れない | 電流を下げる |
+| ドライバが熱停止 | 電流を下げ、放熱を追加する |
+
+1/8 microstepは診断用です。
+1/16では `steps/mm = 80`、60mm/s時は4800step/sです。
+1/8では `steps/mm = 40`、60mm/s時は2400step/sです。
+最終的なペンプロッタ用途では1/16を本命にし、1/8は切り分けとして使います。
+
+24V化やモータ変更は最後の検討項目です。
+12Vで高速側のトルクが足りない場合は24V化が効くことがありますが、TMC2209モジュール、電解コンデンサ耐圧、電源容量、放熱を確認してから行ってください。
 
 ## 機械パラメータ
 
 GT2 20T 前提です。TMC2209 は起動時にUARTで 1/16 microstepへ設定します。
+脱調切り分け時は `microstep 8` で 1/8 に切り替えられます。
 
 ```text
 GT2 pitch: 2 mm
@@ -196,7 +267,8 @@ steps/mm: 3200 / 40 = 80
 
 UART接続が失敗するとTMC2209側の既定マイクロステップのまま動くため、Serialログまたは `s` コマンドで `tmc2209_uart=OK` を確認してください。
 `tmc2209_uart=FAIL` の場合、microstep設定が検証できないため homing と通常移動は拒否されます。
-電流設定は `TMC_RMS_CURRENT_MA` と `TMC_HOLD_MULTIPLIER` から `IRUN` / `IHOLD` を計算し、UARTで直接レジスタへ書き込みます。
+電流設定は起動時に `TMC_RMS_CURRENT_MA` と `TMC_HOLD_MULTIPLIER` から `IRUN` / `IHOLD` を計算し、UARTで直接レジスタへ書き込みます。
+脱調切り分け時は `i <mA>` でRMS電流を実行時に変更できます。
 `TMC_TPOWERDOWN` 後に `IHOLD` 側へ移行します。
 起動直後はTMC2209がUART設定を取りこぼす場合があるため、`TMC_STARTUP_REAPPLY_DELAY_MS` 待ってから同じ設定を再適用します。
 さらに `StepDirDriver` 有効化後にも再適用し、起動直後から `on` コマンド後と同じ設定状態にします。

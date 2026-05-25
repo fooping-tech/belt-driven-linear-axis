@@ -18,11 +18,16 @@ const HomingConfig kHomingConfig = {
     LIMIT_DEBOUNCE_MS,
 };
 
+uint16_t runtimeMicrosteps = MICROSTEPS;
+float runtimeStepsPerMm = STEPS_PER_MM;
+
 #if ACTIVE_DRIVER == DRIVER_TMC2209
 HardwareSerial TmcSerial(1);
 TMC2209Stepper TmcDriver(&TmcSerial, TMC_R_SENSE, TMC_DRIVER_ADDRESS);
 bool tmcUartOk = false;
 uint8_t tmcUartAddress = TMC_DRIVER_ADDRESS;
+uint16_t tmcRuntimeRmsCurrentMa = TMC_RMS_CURRENT_MA;
+bool tmcSpreadCycle = false;
 uint8_t tmcConfiguredIrun = 0;
 uint8_t tmcConfiguredIhold = 0;
 float tmcConfiguredRunRmsMa = 0.0F;
@@ -52,8 +57,8 @@ uint8_t rmsMaToCurrentScale(const float rmsMa, const bool vsense) {
 }
 
 void applyTmc2209Current(TMC2209Stepper& driver) {
-  const float targetHoldRmsMa = static_cast<float>(TMC_RMS_CURRENT_MA) * TMC_HOLD_MULTIPLIER;
-  tmcConfiguredIrun = rmsMaToCurrentScale(static_cast<float>(TMC_RMS_CURRENT_MA), TMC_CURRENT_VSENSE);
+  const float targetHoldRmsMa = static_cast<float>(tmcRuntimeRmsCurrentMa) * TMC_HOLD_MULTIPLIER;
+  tmcConfiguredIrun = rmsMaToCurrentScale(static_cast<float>(tmcRuntimeRmsCurrentMa), TMC_CURRENT_VSENSE);
   tmcConfiguredIhold = rmsMaToCurrentScale(targetHoldRmsMa, TMC_CURRENT_VSENSE);
   tmcConfiguredRunRmsMa = currentScaleToRmsMa(tmcConfiguredIrun, TMC_CURRENT_VSENSE);
   tmcConfiguredHoldRmsMa = currentScaleToRmsMa(tmcConfiguredIhold, TMC_CURRENT_VSENSE);
@@ -77,10 +82,10 @@ void applyTmc2209Config(TMC2209Stepper& driver) {
   driver.hstrt(5);
   driver.hend(0);
   driver.tbl(2);
-  driver.microsteps(MICROSTEPS);
+  driver.microsteps(runtimeMicrosteps);
   driver.intpol(true);
 
-  driver.en_spreadCycle(false);
+  driver.en_spreadCycle(tmcSpreadCycle);
   driver.pwm_autoscale(true);
   driver.pwm_autograd(false);
 
@@ -91,8 +96,8 @@ void applyTmc2209Config(TMC2209Stepper& driver) {
 void printTmc2209CurrentStatus(const char* label) {
   Serial.printf("TMC2209 current %s: target_run=%.0f mA target_hold=%.0f mA irun=%u ihold=%u iholddelay=%u vsense=%u estimated_run=%.0f mA estimated_hold=%.0f mA reported_rms=%u mA cs_actual=%u tpowerdown=%u ifcnt=%u\n",
                 label,
-                static_cast<float>(TMC_RMS_CURRENT_MA),
-                static_cast<float>(TMC_RMS_CURRENT_MA) * TMC_HOLD_MULTIPLIER,
+                static_cast<float>(tmcRuntimeRmsCurrentMa),
+                static_cast<float>(tmcRuntimeRmsCurrentMa) * TMC_HOLD_MULTIPLIER,
                 TmcDriver.irun(),
                 TmcDriver.ihold(),
                 TmcDriver.iholddelay(),
@@ -112,7 +117,9 @@ AppController::AppController()
       limit_(PIN_LIMIT_X_MIN, true, true, LIMIT_DEBOUNCE_MS),
       axis_(driver_, &limit_, STEPS_PER_MM, HOMING_DIRECTION),
       homing_(axis_, kHomingConfig),
-      motion_(axis_, DEFAULT_MOVE_SPEED_MM_S) {}
+      motion_(axis_, DEFAULT_MOVE_SPEED_MM_S) {
+  motion_.setAccelerationMmS2(DEFAULT_ACCELERATION_MM_S2);
+}
 
 void AppController::begin() {
   auto cfg = M5.config();
@@ -253,10 +260,11 @@ void AppController::initDriverUart() {
   Serial.printf("TMC2209 UART connection: %s (test_connection=%u)\n",
                 tmcUartOk ? "OK" : "FAIL",
                 connectionResult);
-  Serial.printf("TMC2209 microsteps set to 1/%u, steps/mm=%.2f, rms_current=%u mA\n",
-                MICROSTEPS,
-                STEPS_PER_MM,
-                TMC_RMS_CURRENT_MA);
+  Serial.printf("TMC2209 microsteps set to 1/%u, steps/mm=%.2f, rms_current=%u mA, chop=%s\n",
+                runtimeMicrosteps,
+                runtimeStepsPerMm,
+                tmcRuntimeRmsCurrentMa,
+                tmcSpreadCycle ? "spreadCycle" : "stealthChop");
   printTmc2209CurrentStatus("startup final");
 #else
   Serial.println("A4988 mode: TMC2209 UART initialization skipped");
@@ -275,6 +283,84 @@ void AppController::processSerialLine(const String& line) {
 
   if (command == "s") {
     printStatus();
+    return;
+  }
+
+  if (command.startsWith("profile")) {
+    String args = trimmed.substring(7);
+    args.trim();
+    args.toLowerCase();
+    if (state_ == State::Moving || state_ == State::Homing) {
+      Serial.printf("Profile rejected: state=%s\n", stateName());
+      return;
+    }
+    if (args == "trap" || args == "trapezoid") {
+      motion_.setProfile(MotionController::Profile::Trapezoid);
+      Serial.println("Motion profile set: trap");
+      return;
+    }
+    if (args == "direct") {
+      motion_.setProfile(MotionController::Profile::Direct);
+      Serial.println("Motion profile set: direct");
+      return;
+    }
+    Serial.println("Usage: profile trap|direct");
+    return;
+  }
+
+  if (command.startsWith("accel") || command.startsWith("a")) {
+    float accelerationMmS2 = 0.0F;
+    if (!parseAccelCommand(trimmed, accelerationMmS2) || !validateAcceleration(accelerationMmS2)) {
+      Serial.printf("Usage: a <accel_mm_s2>, accel range %.2f..%.2f mm/s^2\n",
+                    TEST_ACCEL_MIN_MM_S2,
+                    TEST_ACCEL_MAX_MM_S2);
+      return;
+    }
+    if (state_ == State::Moving || state_ == State::Homing) {
+      Serial.printf("Acceleration rejected: state=%s\n", stateName());
+      return;
+    }
+
+    motion_.setAccelerationMmS2(accelerationMmS2);
+    Serial.printf("Acceleration set: %.2f mm/s^2\n", motion_.accelerationMmS2());
+    return;
+  }
+
+  if (command.startsWith("chop") || command.startsWith("mode")) {
+    String args = command.startsWith("chop") ? trimmed.substring(4) : trimmed.substring(4);
+    args.trim();
+    args.toLowerCase();
+    if (args == "spread" || args == "spreadcycle") {
+      setChopMode(true);
+      return;
+    }
+    if (args == "stealth" || args == "stealthchop") {
+      setChopMode(false);
+      return;
+    }
+    Serial.println("Usage: chop stealth|spread, mode stealth|spread");
+    return;
+  }
+
+  if (command.startsWith("current") || command.startsWith("i")) {
+    uint16_t currentMa = 0;
+    if (!parseUnsignedCommand(trimmed, currentMa)) {
+      Serial.printf("Usage: i <current_mA>, current range %u..%u mA\n",
+                    TEST_CURRENT_MIN_MA,
+                    TEST_CURRENT_MAX_MA);
+      return;
+    }
+    setRuntimeCurrent(currentMa);
+    return;
+  }
+
+  if (command.startsWith("microstep")) {
+    uint16_t microsteps = 0;
+    if (!parseUnsignedCommand(trimmed, microsteps)) {
+      Serial.println("Usage: microstep 16|8");
+      return;
+    }
+    setMicrosteps(microsteps);
     return;
   }
 
@@ -313,7 +399,7 @@ void AppController::processSerialLine(const String& line) {
     return;
   }
 
-  Serial.printf("Unknown command '%s'. Use h, 1, 5, b, s, on, off, v <mm/s>, or m <mm> [mm/s].\n", trimmed.c_str());
+  Serial.printf("Unknown command '%s'. Use h, 1, 5, b, s, on, off, v <mm/s>, a <mm/s2>, profile trap|direct, i <mA>, mode stealth|spread, microstep 16|8, or m <mm> [mm/s].\n", trimmed.c_str());
 }
 
 bool AppController::parseSpeedCommand(const String& line, float& speedMmS) const {
@@ -352,6 +438,86 @@ bool AppController::parseSpeedCommand(const String& line, float& speedMmS) const
   }
 
   return *cursor == '\0';
+}
+
+bool AppController::parseAccelCommand(const String& line, float& accelerationMmS2) const {
+  String command = line;
+  command.toLowerCase();
+
+  String args;
+  if (command.startsWith("accel")) {
+    args = line.substring(5);
+  } else {
+    args = line.substring(1);
+  }
+
+  args.trim();
+  if (args.length() == 0 || args.length() >= 32) {
+    return false;
+  }
+
+  char buffer[32];
+  args.toCharArray(buffer, sizeof(buffer));
+
+  char* cursor = buffer;
+  while (isspace(static_cast<unsigned char>(*cursor))) {
+    ++cursor;
+  }
+
+  char* end = nullptr;
+  accelerationMmS2 = strtof(cursor, &end);
+  if (end == cursor) {
+    return false;
+  }
+
+  cursor = end;
+  while (isspace(static_cast<unsigned char>(*cursor))) {
+    ++cursor;
+  }
+
+  return *cursor == '\0';
+}
+
+bool AppController::parseUnsignedCommand(const String& line, uint16_t& value) const {
+  int start = 1;
+  String command = line;
+  command.toLowerCase();
+  if (command.startsWith("current")) {
+    start = 7;
+  } else if (command.startsWith("microstep")) {
+    start = 9;
+  }
+
+  String args = line.substring(start);
+  args.trim();
+  if (args.length() == 0 || args.length() >= 16) {
+    return false;
+  }
+
+  char buffer[16];
+  args.toCharArray(buffer, sizeof(buffer));
+
+  char* cursor = buffer;
+  while (isspace(static_cast<unsigned char>(*cursor))) {
+    ++cursor;
+  }
+
+  char* end = nullptr;
+  const unsigned long parsed = strtoul(cursor, &end, 10);
+  if (end == cursor || parsed > 65535UL) {
+    return false;
+  }
+
+  cursor = end;
+  while (isspace(static_cast<unsigned char>(*cursor))) {
+    ++cursor;
+  }
+  if (*cursor != '\0') {
+    return false;
+  }
+
+  value = static_cast<uint16_t>(parsed);
+  return true;
 }
 
 bool AppController::parseMoveCommand(const String& line, float& distanceMm, float& speedMmS) const {
@@ -415,6 +581,23 @@ bool AppController::validateMoveSpeed(float speedMmS) const {
   return true;
 }
 
+bool AppController::validateAcceleration(float accelerationMmS2) const {
+  if (!isfinite(accelerationMmS2)) {
+    Serial.println("Acceleration rejected: acceleration must be a finite number");
+    return false;
+  }
+
+  if (accelerationMmS2 < TEST_ACCEL_MIN_MM_S2 || accelerationMmS2 > TEST_ACCEL_MAX_MM_S2) {
+    Serial.printf("Acceleration rejected: %.2f mm/s^2 is outside %.2f..%.2f mm/s^2\n",
+                  accelerationMmS2,
+                  TEST_ACCEL_MIN_MM_S2,
+                  TEST_ACCEL_MAX_MM_S2);
+    return false;
+  }
+
+  return true;
+}
+
 bool AppController::validateMoveRequest(float distanceMm, float speedMmS) const {
   if (!motorPowerEnabled_) {
     Serial.println("Move rejected: motor power is OFF. Send 'on' first, then home again.");
@@ -455,7 +638,7 @@ bool AppController::validateMoveRequest(float distanceMm, float speedMmS) const 
 }
 
 void AppController::printMoveUsage() const {
-  Serial.printf("Usage: m <distance_mm> [speed_mm_s], v <speed_mm_s>, speed range %.2f..%.2f mm/s, default %.2f mm/s\n",
+  Serial.printf("Usage: m <distance_mm> [speed_mm_s], v <speed_mm_s>, a <accel_mm_s2>, profile trap|direct, speed range %.2f..%.2f mm/s, default %.2f mm/s\n",
                 TEST_MOVE_MIN_SPEED_MM_S,
                 TEST_MOVE_MAX_SPEED_MM_S,
                 defaultMoveSpeedMmS_);
@@ -489,6 +672,94 @@ void AppController::setMotorPower(bool enabled) {
   }
 
   printStatus();
+}
+
+void AppController::setRuntimeCurrent(uint16_t currentMa) {
+  if (state_ == State::Moving || state_ == State::Homing) {
+    Serial.printf("Current rejected: state=%s\n", stateName());
+    return;
+  }
+  if (currentMa < TEST_CURRENT_MIN_MA || currentMa > TEST_CURRENT_MAX_MA) {
+    Serial.printf("Current rejected: %u mA is outside %u..%u mA\n",
+                  currentMa,
+                  TEST_CURRENT_MIN_MA,
+                  TEST_CURRENT_MAX_MA);
+    return;
+  }
+
+#if ACTIVE_DRIVER == DRIVER_TMC2209
+  refreshTmcUartStatus();
+  if (!tmcUartOk) {
+    Serial.println("Current rejected: TMC2209 UART is not OK");
+    return;
+  }
+  tmcRuntimeRmsCurrentMa = currentMa;
+  applyTmc2209Current(TmcDriver);
+  refreshTmcUartStatus();
+  Serial.printf("TMC2209 current set: requestedRms=%u mA estimatedRun=%.0f mA estimatedHold=%.0f mA uart=%s\n",
+                tmcRuntimeRmsCurrentMa,
+                tmcConfiguredRunRmsMa,
+                tmcConfiguredHoldRmsMa,
+                tmcUartOk ? "OK" : "FAIL");
+#else
+  Serial.println("Current command ignored: ACTIVE_DRIVER is not TMC2209");
+#endif
+}
+
+void AppController::setChopMode(bool spreadCycle) {
+  if (state_ == State::Moving || state_ == State::Homing) {
+    Serial.printf("Chop mode rejected: state=%s\n", stateName());
+    return;
+  }
+
+#if ACTIVE_DRIVER == DRIVER_TMC2209
+  refreshTmcUartStatus();
+  if (!tmcUartOk) {
+    Serial.println("Chop mode rejected: TMC2209 UART is not OK");
+    return;
+  }
+  tmcSpreadCycle = spreadCycle;
+  TmcDriver.en_spreadCycle(tmcSpreadCycle);
+  refreshTmcUartStatus();
+  Serial.printf("TMC2209 chop mode set: %s uart=%s\n",
+                tmcSpreadCycle ? "spreadCycle" : "stealthChop",
+                tmcUartOk ? "OK" : "FAIL");
+#else
+  Serial.println("Chop mode command ignored: ACTIVE_DRIVER is not TMC2209");
+#endif
+}
+
+void AppController::setMicrosteps(uint16_t microsteps) {
+  if (state_ == State::Moving || state_ == State::Homing) {
+    Serial.printf("Microstep rejected: state=%s\n", stateName());
+    return;
+  }
+  if (microsteps != 8 && microsteps != 16) {
+    Serial.println("Microstep rejected: use 16 or 8 for this diagnostic");
+    return;
+  }
+
+#if ACTIVE_DRIVER == DRIVER_TMC2209
+  refreshTmcUartStatus();
+  if (!tmcUartOk) {
+    Serial.println("Microstep rejected: TMC2209 UART is not OK");
+    return;
+  }
+  runtimeMicrosteps = microsteps;
+  runtimeStepsPerMm = (MOTOR_FULL_STEPS_PER_REV * runtimeMicrosteps) / PULLEY_TRAVEL_MM_PER_REV;
+  axis_.setStepsPerMm(runtimeStepsPerMm);
+  axis_.setHomed(false);
+  motion_.stop();
+  TmcDriver.microsteps(runtimeMicrosteps);
+  refreshTmcUartStatus();
+  state_ = State::NotHomed;
+  Serial.printf("TMC2209 microstep set: 1/%u stepsPerMm=%.2f uart=%s. Position is no longer trusted; home again.\n",
+                runtimeMicrosteps,
+                runtimeStepsPerMm,
+                tmcUartOk ? "OK" : "FAIL");
+#else
+  Serial.println("Microstep command ignored: ACTIVE_DRIVER is not TMC2209");
+#endif
 }
 
 void AppController::startHoming() {
@@ -541,12 +812,16 @@ void AppController::startMoveRelative(float mm, float speedMmS) {
   }
 
   state_ = State::Moving;
-  Serial.printf("Move started: delta=%.2f mm speed=%.2f mm/s target=%.2f mm softLimit=%.2f..%.2f mm\n",
+  Serial.printf("Move started: delta=%.2f mm speed=%.2f mm/s accel=%.2f mm/s^2 profile=%s target=%.2f mm softLimit=%.2f..%.2f mm microsteps=1/%u stepsPerMm=%.2f\n",
                 mm,
                 speedMmS,
+                motion_.accelerationMmS2(),
+                motion_.profileName(),
                 targetMm,
                 X_MIN_MM,
-                X_MAX_MM);
+                X_MAX_MM,
+                runtimeMicrosteps,
+                axis_.stepsPerMm());
 }
 
 void AppController::updateState() {
@@ -609,7 +884,7 @@ void AppController::printStatus() {
   const uint8_t connectionResult = refreshTmcUartStatus();
 #endif
 
-  Serial.printf("state=%s homing=%s motion=%s pos=%.2fmm steps=%ld speed=%.2fmm/s defaultSpeed=%.2fmm/s homed=%s limitRaw=%s limitDebounced=%s\n",
+  Serial.printf("state=%s homing=%s motion=%s pos=%.2fmm steps=%ld speed=%.2fmm/s defaultSpeed=%.2fmm/s accel=%.2fmm/s^2 profile=%s homed=%s limitRaw=%s limitDebounced=%s\n",
                 stateName(),
                 homing_.stateName(),
                 motion_.stateName(),
@@ -617,6 +892,8 @@ void AppController::printStatus() {
                 axis_.currentPositionSteps(),
                 motion_.speedMmS(),
                 defaultMoveSpeedMmS_,
+                motion_.accelerationMmS2(),
+                motion_.profileName(),
                 axis_.isHomed() ? "true" : "false",
                 limit_.isPressedRaw() ? "ON" : "OFF",
                 limit_.isPressedDebounced() ? "ON" : "OFF");
@@ -624,20 +901,21 @@ void AppController::printStatus() {
                 motorPowerEnabled_ ? "ON" : "OFF",
                 driver_.isEnabled() ? "true" : "false");
 #if ACTIVE_DRIVER == DRIVER_TMC2209
-  Serial.printf("tmc2209_uart=%s test_connection=%u microsteps=1/%u stepsPerMm=%.2f rmsCurrent=%u mA\n",
+  Serial.printf("tmc2209_uart=%s test_connection=%u microsteps=1/%u stepsPerMm=%.2f runtimeCurrent=%u mA chopMode=%s\n",
                 tmcUartOk ? "OK" : "FAIL",
                 connectionResult,
-                MICROSTEPS,
-                STEPS_PER_MM,
-                TMC_RMS_CURRENT_MA);
+                runtimeMicrosteps,
+                axis_.stepsPerMm(),
+                tmcRuntimeRmsCurrentMa,
+                tmcSpreadCycle ? "spreadCycle" : "stealthChop");
   Serial.printf("tmc2209_uart_address=0b%02u rx=GPIO%u tx=GPIO%u\n",
                 tmcUartAddress,
                 TMC_UART_RX_PIN,
                 TMC_UART_TX_PIN);
   Serial.printf("tmc2209_current_config=requestedRms=%u mA holdMultiplier=%.2f targetHold=%.0f mA irun=%u ihold=%u iholddelay=%u vsense=%u estimatedRun=%.0f mA estimatedHold=%.0f mA reportedRms=%u mA csActual=%u tpowerdown=%u ifcnt=%u\n",
-                TMC_RMS_CURRENT_MA,
+                tmcRuntimeRmsCurrentMa,
                 TMC_HOLD_MULTIPLIER,
-                static_cast<float>(TMC_RMS_CURRENT_MA) * TMC_HOLD_MULTIPLIER,
+                static_cast<float>(tmcRuntimeRmsCurrentMa) * TMC_HOLD_MULTIPLIER,
                 TmcDriver.irun(),
                 TmcDriver.ihold(),
                 TmcDriver.iholddelay(),

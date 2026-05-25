@@ -12,6 +12,11 @@ class MotionController {
     Error,
   };
 
+  enum class Profile : uint8_t {
+    Direct,
+    Trapezoid,
+  };
+
   MotionController(Axis& axis, float speedMmS);
 
   bool moveToMm(float targetMm);
@@ -26,14 +31,24 @@ class MotionController {
   const char* stateName() const;
   float targetMm() const;
   float speedMmS() const;
+  void setAccelerationMmS2(float accelerationMmS2);
+  float accelerationMmS2() const;
+  void setProfile(Profile profile);
+  Profile profile() const;
+  const char* profileName() const;
 
  private:
-  bool stepDue();
+  void updateProfileSpeed();
+  bool stepDue(float stepsPerSecond);
 
   Axis& axis_;
   float speedMmS_;
+  float accelerationMmS2_ = 100.0F;
+  float currentSpeedStepsS_ = 0.0F;
   long targetSteps_ = 0;
   int direction_ = 1;
+  Profile profile_ = Profile::Trapezoid;
   State state_ = State::Idle;
   uint32_t lastStepUs_ = 0;
+  uint32_t lastSpeedUpdateUs_ = 0;
 };

@@ -13,6 +13,7 @@ class Axis {
   float currentPositionMm() const;
   long currentPositionSteps() const;
   float stepsPerMm() const;
+  void setStepsPerMm(float stepsPerMm);
   bool isHomed() const;
   void setHomed(bool homed);
   void setCurrentPositionSteps(long steps);
@@ -39,4 +40,3 @@ class Axis {
   bool softLimitsEnabled_ = false;
   bool homed_ = false;
 };
-

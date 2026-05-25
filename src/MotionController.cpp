@@ -19,6 +19,8 @@ bool MotionController::moveToMm(float targetMm) {
 
   direction_ = delta > 0 ? 1 : -1;
   lastStepUs_ = micros();
+  lastSpeedUpdateUs_ = lastStepUs_;
+  currentSpeedStepsS_ = 0.0F;
   state_ = State::Moving;
   return true;
 }
@@ -47,7 +49,8 @@ void MotionController::update() {
     return;
   }
 
-  if (!stepDue()) {
+  updateProfileSpeed();
+  if (!stepDue(currentSpeedStepsS_)) {
     return;
   }
 
@@ -97,8 +100,70 @@ float MotionController::speedMmS() const {
   return speedMmS_;
 }
 
-bool MotionController::stepDue() {
-  const float stepsPerSecond = speedMmS_ * axis_.stepsPerMm();
+void MotionController::setAccelerationMmS2(float accelerationMmS2) {
+  accelerationMmS2_ = accelerationMmS2;
+}
+
+float MotionController::accelerationMmS2() const {
+  return accelerationMmS2_;
+}
+
+void MotionController::setProfile(Profile profile) {
+  profile_ = profile;
+}
+
+MotionController::Profile MotionController::profile() const {
+  return profile_;
+}
+
+const char* MotionController::profileName() const {
+  switch (profile_) {
+    case Profile::Direct:
+      return "direct";
+    case Profile::Trapezoid:
+      return "trap";
+  }
+  return "unknown";
+}
+
+void MotionController::updateProfileSpeed() {
+  const float targetStepsPerSecond = speedMmS_ * axis_.stepsPerMm();
+  if (profile_ == Profile::Direct) {
+    currentSpeedStepsS_ = targetStepsPerSecond;
+    return;
+  }
+
+  const float accelerationStepsS2 = accelerationMmS2_ * axis_.stepsPerMm();
+  if (targetStepsPerSecond <= 0.0F || accelerationStepsS2 <= 0.0F) {
+    state_ = State::Error;
+    return;
+  }
+
+  const uint32_t nowUs = micros();
+  const float dtS = static_cast<float>(nowUs - lastSpeedUpdateUs_) / 1000000.0F;
+  lastSpeedUpdateUs_ = nowUs;
+
+  const long remainingSteps = labs(targetSteps_ - axis_.currentPositionSteps());
+  const float stoppingSteps = (currentSpeedStepsS_ * currentSpeedStepsS_) / (2.0F * accelerationStepsS2);
+  const bool shouldDecelerate = static_cast<float>(remainingSteps) <= stoppingSteps + 1.0F;
+  const float deltaSpeed = accelerationStepsS2 * dtS;
+
+  if (shouldDecelerate) {
+    currentSpeedStepsS_ -= deltaSpeed;
+  } else {
+    currentSpeedStepsS_ += deltaSpeed;
+  }
+
+  const float minStepsPerSecond = fminf(targetStepsPerSecond, fmaxf(1.0F, accelerationStepsS2 * 0.005F));
+  if (currentSpeedStepsS_ < minStepsPerSecond) {
+    currentSpeedStepsS_ = minStepsPerSecond;
+  }
+  if (currentSpeedStepsS_ > targetStepsPerSecond) {
+    currentSpeedStepsS_ = targetStepsPerSecond;
+  }
+}
+
+bool MotionController::stepDue(float stepsPerSecond) {
   if (stepsPerSecond <= 0.0F) {
     state_ = State::Error;
     return false;

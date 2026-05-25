@@ -24,6 +24,10 @@ float Axis::stepsPerMm() const {
   return stepsPerMm_;
 }
 
+void Axis::setStepsPerMm(float stepsPerMm) {
+  stepsPerMm_ = stepsPerMm;
+}
+
 bool Axis::isHomed() const {
   return homed_;
 }
@@ -114,4 +118,3 @@ void Axis::applyStep(int direction) {
   driver_.stepPulse();
   currentPositionSteps_ += normalizedDirection;
 }
-
