@@ -150,6 +150,8 @@ X_MAX_MM = 55.0
 home 完了前の通常移動は禁止です。
 home 完了後も、ソフトリミットを超える移動は拒否されます。
 通常移動中にリミット方向へ進んでリミット ON を検出した場合は安全停止して `Error` になります。
+このときSerialには `Motion error detail:` として、停止時点の `pos`、`steps`、`target`、`targetSteps`、`remainingSteps`、`limitRaw`、`limitDebounced` を出します。
+脱調探索ではこの行で、終端直前でリミットを押したのか、目標位置付近で押したのかをステップ単位で確認できます。
 
 ## 操作
 
@@ -250,6 +252,148 @@ Serial コマンド:
 
 24V化やモータ変更は最後の検討項目です。
 12Vで高速側のトルクが足りない場合は24V化が効くことがありますが、TMC2209モジュール、電解コンデンサ耐圧、電源容量、放熱を確認してから行ってください。
+
+## 脱調パラメータ自動探索
+
+PC側の `tools/step_loss_sweep.py` で、既存のSerialコマンドを使って速度、加速度、電流、chop mode、microstepの組み合わせを自動テストできます。
+ファームウェア側に専用モードは追加せず、`h`、`1`、`5`、`b`、`s`、`v`、`a`、`i`、`mode`、`microstep` を送信して判定します。
+
+入力CSVは `tools/step_loss_params.csv` を雛形にします。
+
+```csv
+speed_mm_s,accel_mm_s2,current_ma,chop_mode,microsteps
+50,100,500,stealth,16
+55,100,500,stealth,16
+60,100,600,spread,16
+```
+
+実行例:
+
+```sh
+python3 tools/step_loss_sweep.py --csv tools/step_loss_params.csv --port auto
+```
+
+実行中は各条件ごとに判定、スコア、リミット到達位置誤差、残ステップを表示します。
+
+```text
+[1/10] speed=50 accel=100 current=100 mode=stealth microsteps=16
+  test1 => PASS score=98.0 reason=OK limit=ON timing=DURING_MOVE error=0.0100mm remainingSteps=1
+  test2 => PASS score=98.0 reason=OK limit=ON timing=DURING_MOVE error=0.0100mm remainingSteps=1
+  => PASS score=98.0 reason=OK limit=ON timing=DURING_MOVE error=0.0100mm remainingSteps=1 tests=PASS/PASS
+```
+
+実機接続で `pyserial` が見つからない場合は、先に次を実行してください。
+
+```sh
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install pyserial
+```
+
+`--port auto` はSerial候補が1つだけのとき自動選択します。
+複数候補がある場合は、表示された候補から次のように明示指定してください。
+
+```sh
+python3 tools/step_loss_sweep.py --csv tools/step_loss_params.csv --port /dev/cu.usbmodemXXXX
+```
+
+戻り方向の `b` は既定で `30 mm/s` に下げて実行します。
+変更する場合は `--return-speed <mm/s>` を指定します。
+
+```sh
+python3 tools/step_loss_sweep.py --return-speed 20 --port /dev/cu.usbmodemXXXX
+```
+
+5回目の `b` 完了直後に `limitRaw=ON` だが `limitDebounced=OFF` の場合は、既定で `0.2` 秒待ってstatusを再取得します。
+この待ち時間は `--limit-settle-sec <sec>` で変更できます。
+
+各CSV行では、次の2通りを毎回homingから独立に実行します。
+
+1. `1` を5回実行し、`v 30` に戻してから `b` を5回実行します。5回目の `b` 後に `limitDebounced=ON` ならPASSです。
+2. `5` を1回実行し、`v 30` に戻してから `b` を5回実行します。5回目の `b` 後に `limitDebounced=ON` ならPASSです。
+
+両方のテストがPASSした場合だけ、そのパラメータ行をPASSとします。
+homing失敗、motion error、command rejected、timeout、最終limit OFFはFAILです。
+
+実行後、`reports/` に次のファイルを出力します。
+
+- `step_loss_sweep_<timestamp>.md`: Markdownレポート
+- `step_loss_sweep_<timestamp>.csv`: 全テスト結果CSV
+- `step_loss_sweep_<timestamp>/`: `plot_step_loss_sweep.py` によるグラフ付きレポート一式
+
+Markdownレポートには、全結果表に加えて次の集計が入ります。
+
+- Best Safe Settings: `current_ma`、`chop_mode`、`microsteps`、`accel_mm_s2` ごとの最大PASS速度と推奨速度
+- Condition Summary: `current_ma + chop_mode + microsteps` ごとの `pass_count`、`fail_count`、`pass_rate`、`max_pass_speed_mm_s`
+- OK/NG Graph: 横軸速度、縦軸加速度のOK/NG表
+- Failure Reason Map: 横軸速度、縦軸加速度の失敗理由コード表
+- Final Limit Timing Map: 5回目の `b` の途中でリミットONしたか、動作完了後にONだったかの分類表
+- Plot Report: `abs_error_mm` を主指標にしたずれ量ヒートマップ、OK/WARN/NGヒートマップ、最大安定速度グラフ、推奨条件表へのリンク
+
+失敗理由コード:
+
+| Code | Meaning |
+| --- | --- |
+| OK | pass |
+| SL | suspected step loss |
+| TO | timeout |
+| HE | homing error |
+| ME | motion error |
+| RE | command rejected |
+| LOFF | final limit OFF |
+| LPOS | final limit ON too far from zero |
+
+Final Limit Timing Map のコード:
+
+| Code | Meaning |
+| --- | --- |
+| DURING_MOVE | 5回目の `b` の途中でリミットONし、通常移動がリミット停止した |
+| AFTER_COMPLETE | 5回目の `b` が完了したあと、statusでリミットONだった |
+| AFTER_SETTLE | 5回目の `b` 完了直後はdebounced OFFだったが、待機後にONになった |
+| EARLY_LIMIT | 1〜4回目の `b` でリミットONした |
+| NOT_REACHED | 5回目の `b` 完了後もリミットOFFだった |
+| UNKNOWN | ログから分類できなかった |
+
+リミットON時のstatus位置は既定で `0.5 mm` 以内を合格とします。
+変更する場合は `--limit-position-tolerance <mm>` を指定します。
+スコアはリミットON時の位置誤差をこの許容値で正規化した `0..100` の値です。
+新しいファームが出す `Motion error detail:` がある場合は、その `pos` と `remainingSteps` を優先して使います。
+`error_mm=0` でも `limitDebounced=OFF` の場合は `LOFF` でFAILです。
+位置は合っていても、要求条件である「リミットスイッチON」が成立していないためです。
+
+グラフ付きレポートには `pandas` と `matplotlib` が必要です。
+未導入でもsweep本体、Markdownレポート、全結果CSVは出力され、レポート末尾にインストール案内が追記されます。
+
+```sh
+python3 -m pip install -r requirements-plot.txt
+```
+
+グラフ生成を省略する場合は `--skip-plot-report` を指定します。
+ヒートマップのセル値を非表示にする場合は `--no-plot-cell-labels`、ずれ量の色スケールを対数にする場合は `--plot-error-scale log` を使います。
+従来のOK/NG PNGを `reports/` 直下へ直接出したい場合だけ `--legacy-heatmaps` を指定します。
+
+スクリプトとレポート生成だけを確認する場合は、実機なしで `--simulate` を使えます。
+
+```sh
+python3 tools/step_loss_sweep.py --simulate
+```
+
+### 脱調結果CSVの可視化
+
+既存のsweep結果CSVから、ずれ量ヒートマップと推奨条件表を生成できます。
+可視化には `pandas` と `matplotlib` が必要です。
+
+```sh
+python3 -m pip install -r requirements-plot.txt
+python3 tools/plot_step_loss_sweep.py \
+  --csv reports/step_loss_sweep_YYYYMMDD_HHMMSS.csv \
+  --out reports \
+  --show-cell-labels
+```
+
+出力は `reports/step_loss_sweep_YYYYMMDD_HHMMSS/` にまとまります。
+主に確認する図は `figures/02_error_heatmap_by_current.png` です。
+`--error-scale log` を使うと、ずれ量の大小差が大きい場合も小さい変化を見やすくできます。
 
 ## 機械パラメータ
 

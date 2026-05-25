@@ -56,6 +56,6 @@ constexpr float TEST_MOVE_MAX_SPEED_MM_S = 200.0F;
 constexpr float DEFAULT_ACCELERATION_MM_S2 = 100.0F;
 constexpr float TEST_ACCEL_MIN_MM_S2 = 1.0F;
 constexpr float TEST_ACCEL_MAX_MM_S2 = 5000.0F;
-constexpr uint16_t TEST_CURRENT_MIN_MA = 300;
+constexpr uint16_t TEST_CURRENT_MIN_MA = 100;
 constexpr uint16_t TEST_CURRENT_MAX_MA = 1000;
 constexpr uint32_t BUTTON_LONG_PRESS_MS = 700;

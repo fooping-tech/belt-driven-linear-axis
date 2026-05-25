@@ -96,6 +96,14 @@ float MotionController::targetMm() const {
   return static_cast<float>(targetSteps_) / axis_.stepsPerMm();
 }
 
+long MotionController::targetSteps() const {
+  return targetSteps_;
+}
+
+long MotionController::remainingSteps() const {
+  return labs(targetSteps_ - axis_.currentPositionSteps());
+}
+
 float MotionController::speedMmS() const {
   return speedMmS_;
 }

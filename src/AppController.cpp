@@ -869,6 +869,14 @@ void AppController::updateState() {
         printStatus();
       } else if (motion_.hasError()) {
         state_ = State::Error;
+        Serial.printf("Motion error detail: pos=%.4fmm steps=%ld target=%.4fmm targetSteps=%ld remainingSteps=%ld limitRaw=%s limitDebounced=%s\n",
+                      axis_.currentPositionMm(),
+                      axis_.currentPositionSteps(),
+                      motion_.targetMm(),
+                      motion_.targetSteps(),
+                      motion_.remainingSteps(),
+                      limit_.isPressedRaw() ? "ON" : "OFF",
+                      limit_.isPressedDebounced() ? "ON" : "OFF");
         Serial.println("Motion error: limit switch or soft limit stopped movement");
         printStatus();
       }

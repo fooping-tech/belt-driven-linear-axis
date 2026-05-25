@@ -30,6 +30,8 @@ class MotionController {
   State state() const;
   const char* stateName() const;
   float targetMm() const;
+  long targetSteps() const;
+  long remainingSteps() const;
   float speedMmS() const;
   void setAccelerationMmS2(float accelerationMmS2);
   float accelerationMmS2() const;
