@@ -240,7 +240,15 @@ def classify_by_error(
 
     combined = result_code.copy()
     combined.loc[combined.isna()] = error_code.loc[combined.isna()]
-    explicit_ng = result_code == 0.0
+    early_limit_ok = (
+        has_error
+        & (df["abs_error_mm"] <= ok_error_threshold)
+        & (df.get("final_limit_timing", "") == "EARLY_LIMIT")
+    )
+    result_code.loc[early_limit_ok] = 1.0
+    combined.loc[early_limit_ok] = 1.0
+
+    explicit_ng = (result_code == 0.0) & ~early_limit_ok
     combined.loc[explicit_ng] = 0.0
     with_error = error_code.notna()
     combined.loc[with_error & ~explicit_ng] = np.minimum(combined.loc[with_error & ~explicit_ng].fillna(1.0), error_code.loc[with_error & ~explicit_ng])
@@ -266,7 +274,10 @@ def result_label(code: float) -> str:
 def aggregate_duplicate_conditions(df: pd.DataFrame) -> pd.DataFrame:
     """同一条件の重複測定を安全側に集約する。resultは最悪値、abs_error_mmは最大値を使う。"""
     grouped = []
-    for key, group in df.groupby(list(REQUIRED_COLUMNS), dropna=False):
+    key_columns = condition_key_columns(df)
+    for key, group in df.groupby(key_columns, dropna=False):
+        key_values = key if isinstance(key, tuple) else (key,)
+        key_map = dict(zip(key_columns, key_values))
         result_codes = group["result_code"].dropna()
         if (result_codes == 0).any():
             result_code = 0.0
@@ -284,9 +295,6 @@ def aggregate_duplicate_conditions(df: pd.DataFrame) -> pd.DataFrame:
             error_mm = group.loc[idx, "error_mm"]
 
         row = {
-            "speed_mm_s": key[0],
-            "accel_mm_s2": key[1],
-            "current_ma": key[2],
             "result_code": result_code,
             "final_result": result_label(result_code),
             "is_ok": result_code == 1.0,
@@ -294,14 +302,22 @@ def aggregate_duplicate_conditions(df: pd.DataFrame) -> pd.DataFrame:
             "error_mm": error_mm,
             "sample_count": len(group),
         }
+        row.update(key_map)
         for col in optional_columns(group):
             row[col] = join_unique(group[col])
         grouped.append(row)
-    return pd.DataFrame(grouped).sort_values(list(REQUIRED_COLUMNS)).reset_index(drop=True)
+    return pd.DataFrame(grouped).sort_values(key_columns).reset_index(drop=True)
+
+
+def condition_key_columns(df: pd.DataFrame) -> list[str]:
+    columns = list(REQUIRED_COLUMNS)
+    if "chop_mode" in df.columns:
+        columns.append("chop_mode")
+    return columns
 
 
 def optional_columns(df: pd.DataFrame) -> list[str]:
-    skip = set(REQUIRED_COLUMNS) | {
+    skip = set(condition_key_columns(df)) | {
         "result",
         "final_result",
         "result_code",
@@ -331,30 +347,61 @@ def filter_current_list(df: pd.DataFrame, current_list: str) -> pd.DataFrame:
 
 def plot_overview_scatter(df: pd.DataFrame, out_path: str, title_prefix: str = "") -> None:
     """全測定点の散布図を保存する。"""
-    fig, ax = plt.subplots(figsize=(8, 6))
     marker_map = {"OK": "o", "WARN": "^", "NG": "x", "UNKNOWN": "s"}
     color_col = "abs_error_mm" if df["abs_error_mm"].notna().any() else "current_ma"
-    for label, group in df.groupby("final_result", dropna=False):
-        scatter_kwargs = {}
-        if label != "NG":
-            scatter_kwargs["edgecolors"] = "black"
-        ax.scatter(
-            group["speed_mm_s"],
-            group["accel_mm_s2"],
-            c=group[color_col],
-            marker=marker_map.get(label, "s"),
-            s=70,
-            label=label,
-            cmap="viridis",
-            **scatter_kwargs,
-        )
-    mappable = ax.scatter(df["speed_mm_s"], df["accel_mm_s2"], c=df[color_col], cmap="viridis", alpha=0)
-    fig.colorbar(mappable, ax=ax, label=color_col)
-    ax.set_xlabel("speed_mm_s")
-    ax.set_ylabel("accel_mm_s2")
-    ax.set_title(title("Step Loss Sweep Overview", title_prefix))
-    ax.legend(title="Result")
-    ax.grid(True, alpha=0.3)
+    currents = sorted(df["current_ma"].dropna().unique())
+    fig, axes = subplots_for_currents(len(currents), base_width=5.8, base_height=4.2, max_cols=2, constrained=True)
+    modes = sorted(df["chop_mode"].dropna().unique()) if "chop_mode" in df.columns else []
+    offsets = chop_offsets(df["speed_mm_s"], modes)
+    cmap = "viridis"
+    color_values = df[color_col]
+    vmin = 0 if color_col == "abs_error_mm" else color_values.min()
+    vmax = color_values.max() if color_values.notna().any() else 1
+    mappable = None
+
+    present_results: set[str] = set()
+    for ax, current in zip(axes, currents):
+        subset = df[df["current_ma"] == current].copy()
+        for label, group in subset.groupby("final_result", dropna=False):
+            present_results.add(str(label))
+            marker = marker_map.get(label, "s")
+            edgecolors = "black" if label != "NG" else None
+            x_values = group["speed_mm_s"] + group.apply(lambda row: offsets.get(str(row.get("chop_mode", "")), 0.0), axis=1)
+            known = group[color_col].notna()
+            if known.any():
+                scatter = ax.scatter(
+                    x_values[known],
+                    group.loc[known, "accel_mm_s2"],
+                    c=group.loc[known, color_col],
+                    marker=marker,
+                    s=80,
+                    cmap=cmap,
+                    vmin=vmin,
+                    vmax=vmax,
+                    alpha=0.9,
+                    edgecolors=edgecolors,
+                )
+                mappable = scatter
+            if (~known).any():
+                ax.scatter(
+                    x_values[~known],
+                    group.loc[~known, "accel_mm_s2"],
+                    color="#bdbdbd",
+                    marker=marker,
+                    s=80,
+                    alpha=0.85,
+                    edgecolors=edgecolors,
+                )
+        ax.set_xlabel("speed_mm_s")
+        ax.set_ylabel("accel_mm_s2")
+        ax.set_title(f"current = {fmt_num(current)} mA")
+        ax.grid(True, alpha=0.3)
+        ax.set_xticks(sorted(df["speed_mm_s"].dropna().unique()))
+
+    if mappable is not None:
+        fig.colorbar(mappable, ax=axes, label=color_col, fraction=0.025, pad=0.02)
+    fig.suptitle(title("Step Loss Sweep Overview by Current", title_prefix))
+    add_overview_legend(axes[0], marker_map, present_results)
     save_figure(fig, out_path)
 
 
@@ -368,8 +415,8 @@ def plot_error_heatmap_by_current(
     """電流ごとの abs_error_mm ヒートマップを保存する。"""
     if not df["abs_error_mm"].notna().any():
         return False
-    currents = sorted(df["current_ma"].dropna().unique())
-    fig, axes = subplots_for_currents(len(currents), base_width=7.2, base_height=3.4, max_cols=1, constrained=True)
+    facets = heatmap_facets(df)
+    fig, axes = subplots_for_currents(len(facets), base_width=7.2, base_height=3.4, max_cols=1, constrained=True)
     vmax = df["abs_error_mm"].max()
     positive = df.loc[df["abs_error_mm"] > 0, "abs_error_mm"]
     norm = None
@@ -382,17 +429,18 @@ def plot_error_heatmap_by_current(
         norm = LogNorm(vmin=floor, vmax=max(vmax, floor))
 
     image = None
-    for ax, current in zip(axes, currents):
-        pivot = pivot_grid(df[df["current_ma"] == current], plot_values)
+    for ax, facet in zip(axes, facets):
+        subset = facet_subset(df, facet)
+        pivot = pivot_grid(subset, plot_values)
         image_kwargs = {"norm": norm} if norm is not None else {"vmin": 0, "vmax": vmax}
         image = ax.imshow(pivot.values, origin="lower", aspect="auto", cmap="magma", **image_kwargs)
-        setup_heatmap_axis(ax, pivot, f"current = {fmt_num(current)} mA")
+        setup_heatmap_axis(ax, pivot, facet_title(facet))
         if show_cell_labels:
             label_heatmap(
                 ax,
                 pivot,
                 fmt="{:.3g}",
-                source=pivot_grid(df[df["current_ma"] == current], "abs_error_mm"),
+                source=pivot_grid(subset, "abs_error_mm"),
                 text_color=lambda value: "white" if vmax > 0 and float(value) / vmax < 0.25 else "black",
             )
     fig.suptitle(title("Position Error Heatmap by Current", title_prefix))
@@ -409,18 +457,18 @@ def plot_result_heatmap_by_current(
     title_prefix: str = "",
 ) -> None:
     """電流ごとの OK/WARN/NG ヒートマップを保存する。"""
-    currents = sorted(df["current_ma"].dropna().unique())
+    facets = heatmap_facets(df)
     cmap = ListedColormap(["#d95f5f", "#f3d36b", "#6fbf73", "#d8d8d8"])
     norm = BoundaryNorm([-0.25, 0.25, 0.75, 1.25, 1.75], cmap.N)
-    fig, axes = subplots_for_currents(len(currents), base_width=7.2, base_height=3.4, max_cols=1, constrained=True)
+    fig, axes = subplots_for_currents(len(facets), base_width=7.2, base_height=3.4, max_cols=1, constrained=True)
     image = None
-    for ax, current in zip(axes, currents):
-        subset = df[df["current_ma"] == current].copy()
+    for ax, facet in zip(axes, facets):
+        subset = facet_subset(df, facet).copy()
         subset["_plot_result"] = subset["result_code"].fillna(1.5)
         pivot = pivot_grid(subset, "_plot_result")
         pivot = pivot.fillna(1.5)
         image = ax.imshow(pivot.values, origin="lower", aspect="auto", cmap=cmap, norm=norm)
-        setup_heatmap_axis(ax, pivot, f"current = {fmt_num(current)} mA")
+        setup_heatmap_axis(ax, pivot, facet_title(facet))
         if show_cell_labels:
             labels = pivot_grid(subset.assign(_label=subset["final_result"]), "_label")
             label_heatmap(ax, labels, fmt="{}")
@@ -490,8 +538,10 @@ def calculate_margin_score(df: pd.DataFrame) -> pd.DataFrame:
     """OK条件ごとに周囲セルを見て margin_score を計算する。"""
     df = df.copy()
     df["margin_score"] = np.nan
-    by_current = {current: group for current, group in df.groupby("current_ma")}
-    for current, group in by_current.items():
+    group_columns = ["current_ma"]
+    if "chop_mode" in df.columns:
+        group_columns.append("chop_mode")
+    for _group_key, group in df.groupby(group_columns, dropna=False):
         speeds = sorted(group["speed_mm_s"].unique())
         accels = sorted(group["accel_mm_s2"].unique())
         lookup = {
@@ -526,7 +576,10 @@ def calculate_margin_score(df: pd.DataFrame) -> pd.DataFrame:
 def select_recommended_settings(df: pd.DataFrame, min_margin_score: float = 0.5) -> pd.DataFrame:
     """safe / balanced / speed の推奨条件を選ぶ。"""
     ok_df = df[df["final_result"] == "OK"].copy()
-    columns = ["rank", "purpose", "speed_mm_s", "accel_mm_s2", "current_ma", "abs_error_mm", "margin_score", "notes"]
+    columns = ["rank", "purpose", "speed_mm_s", "accel_mm_s2", "current_ma"]
+    if "chop_mode" in df.columns:
+        columns.append("chop_mode")
+    columns.extend(["abs_error_mm", "margin_score", "notes"])
     if ok_df.empty:
         return pd.DataFrame(columns=columns)
 
@@ -567,7 +620,7 @@ def select_recommended_settings(df: pd.DataFrame, min_margin_score: float = 0.5)
 
 
 def make_recommendation(rank: int, purpose: str, row: pd.Series, notes: str) -> dict:
-    return {
+    recommendation = {
         "rank": rank,
         "purpose": purpose,
         "speed_mm_s": row["speed_mm_s"],
@@ -577,6 +630,9 @@ def make_recommendation(rank: int, purpose: str, row: pd.Series, notes: str) -> 
         "margin_score": row["margin_score"],
         "notes": notes,
     }
+    if "chop_mode" in row.index:
+        recommendation["chop_mode"] = row["chop_mode"]
+    return recommendation
 
 
 def write_markdown_report(
@@ -616,7 +672,7 @@ def write_markdown_report(
         auto_comment(df),
         "",
         "## Recommended Settings",
-        markdown_table_from_df(recommended_df, ["purpose", "speed_mm_s", "accel_mm_s2", "current_ma", "abs_error_mm", "margin_score", "notes"]),
+        markdown_table_from_df(recommended_df, recommendation_columns(recommended_df)),
         "",
         "## 1. Overview Scatter",
         f"![Overview]({figures_dir}/{FIGURE_NAMES['overview']}.{figure_ext})",
@@ -694,6 +750,55 @@ def subplots_for_currents(
     return fig, axes_list[:count]
 
 
+def heatmap_facets(df: pd.DataFrame) -> list[dict[str, object]]:
+    columns = ["current_ma"]
+    if "chop_mode" in df.columns:
+        columns.append("chop_mode")
+    facets: list[dict[str, object]] = []
+    for values, _group in df.groupby(columns, dropna=False, sort=True):
+        values_tuple = values if isinstance(values, tuple) else (values,)
+        facets.append(dict(zip(columns, values_tuple)))
+    return facets
+
+
+def facet_subset(df: pd.DataFrame, facet: dict[str, object]) -> pd.DataFrame:
+    subset = df
+    for column, value in facet.items():
+        subset = subset[subset[column] == value]
+    return subset
+
+
+def facet_title(facet: dict[str, object]) -> str:
+    current = fmt_num(facet["current_ma"])
+    if "chop_mode" in facet:
+        return f"current = {current} mA, chop = {facet['chop_mode']}"
+    return f"current = {current} mA"
+
+
+def chop_offsets(speed_series: pd.Series, modes: list[str]) -> dict[str, float]:
+    if not modes:
+        return {}
+    speeds = sorted(speed_series.dropna().unique())
+    if len(speeds) >= 2:
+        min_step = min(b - a for a, b in zip(speeds, speeds[1:]) if b > a)
+    else:
+        min_step = 1.0
+    spread = min_step * 0.16
+    center = (len(modes) - 1) / 2.0
+    return {str(mode): (index - center) * spread for index, mode in enumerate(modes)}
+
+
+def add_overview_legend(ax, marker_map: dict[str, str], present_results: set[str]) -> None:
+    from matplotlib.lines import Line2D
+
+    result_handles = [
+        Line2D([0], [0], marker=marker, color="black", linestyle="None", markersize=7, label=label)
+        for label, marker in marker_map.items()
+        if label in present_results
+    ]
+    ax.legend(handles=result_handles, title="Result", loc="best", frameon=True)
+
+
 def setup_heatmap_axis(ax, pivot: pd.DataFrame, title_text: str) -> None:
     ax.set_title(title_text)
     ax.set_xticks(range(len(pivot.columns)), [fmt_num(value) for value in pivot.columns])
@@ -733,6 +838,14 @@ def markdown_table_from_df(df: pd.DataFrame, columns: list[str]) -> str:
     for _, row in df.iterrows():
         rows.append("| " + " | ".join(format_table_value(row[col]) for col in columns) + " |")
     return "\n".join([header, sep] + rows)
+
+
+def recommendation_columns(df: pd.DataFrame) -> list[str]:
+    columns = ["purpose", "speed_mm_s", "accel_mm_s2", "current_ma"]
+    if "chop_mode" in df.columns:
+        columns.append("chop_mode")
+    columns.extend(["abs_error_mm", "margin_score", "notes"])
+    return columns
 
 
 def format_table_value(value) -> str:

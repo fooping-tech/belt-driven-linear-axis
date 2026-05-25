@@ -494,8 +494,12 @@ def run_test(
                     if not final_position_within_tolerance(final_status, log, limit_position_tolerance):
                         return outcome(name, "FAIL", "LPOS", final_limit, "DURING_MOVE", final_status, log, limit_position_tolerance)
                     return outcome(name, "PASS", "OK", final_limit, "DURING_MOVE", final_status, log, limit_position_tolerance)
-            early_timing = "EARLY_LIMIT" if code == "ME" and parse_limit_state(lines) == "ON" else "UNKNOWN"
-            return outcome(name, "FAIL", code, parse_limit_state(lines), early_timing, last_status(lines), log, limit_position_tolerance)
+            early_limit = parse_limit_state(lines)
+            early_status = last_status(lines)
+            early_timing = "EARLY_LIMIT" if code == "ME" and early_limit == "ON" else "UNKNOWN"
+            if early_timing == "EARLY_LIMIT" and final_position_within_tolerance(early_status, log, limit_position_tolerance):
+                return outcome(name, "PASS", "OK", early_limit, early_timing, early_status, log, limit_position_tolerance)
+            return outcome(name, "FAIL", code, early_limit, early_timing, early_status, log, limit_position_tolerance)
 
     status_code, status_lines = runner.status()
     log.extend(tag_lines("s", status_lines))
