@@ -25,6 +25,11 @@ class MotionController {
   bool moveRelativeMm(float deltaMm, float speedMmS);
   void update();
   void stop();
+  void resetTimingStats();
+  uint32_t timingUpdateCount() const;
+  uint32_t timingMaxUpdateGapUs() const;
+  uint64_t timingSumUpdateGapUs() const;
+  float timingAvgUpdateGapUs() const;
   bool isMoving() const;
   bool hasError() const;
   State state() const;
@@ -53,4 +58,8 @@ class MotionController {
   State state_ = State::Idle;
   uint32_t lastStepUs_ = 0;
   uint32_t lastSpeedUpdateUs_ = 0;
+  uint32_t timingUpdateCount_ = 0;
+  uint32_t timingMaxUpdateGapUs_ = 0;
+  uint64_t timingSumUpdateGapUs_ = 0;
+  uint32_t timingLastUpdateUs_ = 0;
 };

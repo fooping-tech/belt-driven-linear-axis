@@ -44,6 +44,17 @@ void MotionController::update() {
     return;
   }
 
+  const uint32_t nowUs = micros();
+  if (timingLastUpdateUs_ != 0) {
+    const uint32_t gapUs = nowUs - timingLastUpdateUs_;
+    timingSumUpdateGapUs_ += gapUs;
+    if (gapUs > timingMaxUpdateGapUs_) {
+      timingMaxUpdateGapUs_ = gapUs;
+    }
+  }
+  timingLastUpdateUs_ = nowUs;
+  ++timingUpdateCount_;
+
   if (axis_.currentPositionSteps() == targetSteps_) {
     state_ = State::Idle;
     return;
@@ -66,6 +77,33 @@ void MotionController::update() {
 
 void MotionController::stop() {
   state_ = State::Idle;
+}
+
+void MotionController::resetTimingStats() {
+  timingUpdateCount_ = 0;
+  timingMaxUpdateGapUs_ = 0;
+  timingSumUpdateGapUs_ = 0;
+  timingLastUpdateUs_ = 0;
+}
+
+uint32_t MotionController::timingUpdateCount() const {
+  return timingUpdateCount_;
+}
+
+uint32_t MotionController::timingMaxUpdateGapUs() const {
+  return timingMaxUpdateGapUs_;
+}
+
+uint64_t MotionController::timingSumUpdateGapUs() const {
+  return timingSumUpdateGapUs_;
+}
+
+float MotionController::timingAvgUpdateGapUs() const {
+  const uint32_t gapCount = timingUpdateCount_ > 0 ? timingUpdateCount_ - 1 : 0;
+  if (gapCount == 0) {
+    return NAN;
+  }
+  return static_cast<float>(static_cast<double>(timingSumUpdateGapUs_) / static_cast<double>(gapCount));
 }
 
 bool MotionController::isMoving() const {

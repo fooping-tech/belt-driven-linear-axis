@@ -3,6 +3,7 @@
 #include <ctype.h>
 #include <math.h>
 #include <stdlib.h>
+#include <string.h>
 
 #if ACTIVE_DRIVER == DRIVER_TMC2209
 #include <TMCStepper.h>
@@ -20,6 +21,16 @@ const HomingConfig kHomingConfig = {
 
 uint16_t runtimeMicrosteps = MICROSTEPS;
 float runtimeStepsPerMm = STEPS_PER_MM;
+bool sgCaptureActive = false;
+uint32_t sgCaptureStartedMs = 0;
+const char* homeEndLimitState = "NA";
+const char* moveStartLimitState = "NA";
+const char* moveEndLimitState = "NA";
+const char* timeoutLimitState = "NA";
+const char* limitFirstTriggerTiming = "NONE";
+uint32_t limitTransitionCount = 0;
+bool lastMoveLimitState = false;
+bool moveLimitStateInitialized = false;
 
 #if ACTIVE_DRIVER == DRIVER_TMC2209
 HardwareSerial TmcSerial(1);
@@ -32,6 +43,27 @@ uint8_t tmcConfiguredIrun = 0;
 uint8_t tmcConfiguredIhold = 0;
 float tmcConfiguredRunRmsMa = 0.0F;
 float tmcConfiguredHoldRmsMa = 0.0F;
+uint8_t sgThreshold = TMC_SGTHRS_DEFAULT;
+uint32_t sgTcoolThreshold = TMC_TCOOLTHRS_DEFAULT;
+bool sgCurrentValid = false;
+uint16_t sgCurrent = 0;
+bool sgStatsHaveValidSample = false;
+uint16_t sgMinValid = 0;
+uint16_t sgMaxValid = 0;
+uint64_t sgSumValid = 0;
+uint32_t sgCount = 0;
+uint32_t sgValidCount = 0;
+uint32_t sgZeroCount = 0;
+uint32_t sgLowCount50 = 0;
+uint32_t sgLowCount100 = 0;
+uint32_t sgLowCount150 = 0;
+bool sgSamplingEnabled = SG_POLLING_ENABLED_DEFAULT;
+uint32_t sgSampleIntervalMs = SG_UPDATE_INTERVAL_MS;
+bool sgLogEnabled = false;
+uint32_t sgLogIntervalMs = SG_LOG_INTERVAL_MS_DEFAULT;
+uint32_t lastSgUpdateMs = 0;
+uint32_t lastSgLogMs = 0;
+uint32_t lastSgErrorMs = 0;
 
 uint8_t refreshTmcUartStatus() {
   const uint8_t connectionResult = TmcDriver.test_connection();
@@ -88,6 +120,9 @@ void applyTmc2209Config(TMC2209Stepper& driver) {
   driver.en_spreadCycle(tmcSpreadCycle);
   driver.pwm_autoscale(true);
   driver.pwm_autograd(false);
+  driver.semin(0);
+  driver.SGTHRS(sgThreshold);
+  driver.TCOOLTHRS(sgTcoolThreshold);
 
   // Apply current last because CHOPCONF writes can otherwise overwrite vsense.
   applyTmc2209Current(driver);
@@ -156,6 +191,7 @@ void AppController::update() {
   handleButton();
   handleSerial();
   updateState();
+  updateStallGuardStats();
 
   const uint32_t nowMs = millis();
   if (nowMs - lastDisplayMs_ >= 250) {
@@ -180,6 +216,7 @@ void AppController::handleButton() {
       startMoveRelative(10.0F);
     } else if (state_ == State::Moving) {
       motion_.stop();
+      sgCaptureActive = false;
       state_ = State::Ready;
       Serial.println("Move stopped by button");
     } else {
@@ -216,13 +253,6 @@ void AppController::handleSerial() {
         case 'B':
           startMoveRelative(-10.0F);
           return;
-        case 's':
-        case 'S':
-          if (Serial.available() == 0) {
-            printStatus();
-            return;
-          }
-          break;
       }
     }
 
@@ -283,6 +313,89 @@ void AppController::processSerialLine(const String& line) {
 
   if (command == "s") {
     printStatus();
+    return;
+  }
+
+  if (command == "sg") {
+    printStallGuardStatus();
+    return;
+  }
+
+  if (command == "mt") {
+    if (state_ == State::Moving) {
+      timeoutLimitState = limit_.isPressedDebounced() ? "ON" : "OFF";
+    }
+    printMotionTimingSummary();
+    return;
+  }
+
+  if (command == "tmcv") {
+    char validateFailReason[64] = "OK";
+    const bool ok = validateTmcUartForMove(validateFailReason, sizeof(validateFailReason));
+    Serial.printf("TMC validate %s reason=%s\n", ok ? "OK" : "FAIL", validateFailReason);
+    return;
+  }
+
+  if (command == "sgreset") {
+    resetStallGuardStats();
+    Serial.println("SG stats reset");
+    printStallGuardStatus();
+    return;
+  }
+
+  if (command.startsWith("sgthrs")) {
+    uint32_t value = 0;
+    if (!parseUnsignedLongCommand(trimmed, "sgthrs", value) || value > 255UL) {
+      Serial.println("Usage: sgthrs <0-255>");
+      return;
+    }
+    setStallGuardThreshold(static_cast<uint16_t>(value));
+    return;
+  }
+
+  if (command.startsWith("tcool")) {
+    uint32_t value = 0;
+    if (!parseUnsignedLongCommand(trimmed, "tcool", value) || value > 0xFFFFFUL) {
+      Serial.println("Usage: tcool <0-1048575>");
+      return;
+    }
+    setStallGuardTcoolThreshold(value);
+    return;
+  }
+
+  if (command.startsWith("sglog")) {
+    uint32_t value = 0;
+    if (!parseUnsignedLongCommand(trimmed, "sglog", value) || value > 1UL) {
+      Serial.println("Usage: sglog <0|1>");
+      return;
+    }
+    sgLogEnabled = value == 1UL;
+    Serial.printf("SG log %s interval_ms=%lu\n", sgLogEnabled ? "ON" : "OFF", sgLogIntervalMs);
+    return;
+  }
+
+  if (command.startsWith("sgen")) {
+    uint32_t value = 0;
+    if (!parseUnsignedLongCommand(trimmed, "sgen", value) || value > 1UL) {
+      Serial.println("Usage: sgen <0|1>");
+      return;
+    }
+    sgSamplingEnabled = value == 1UL;
+    if (!sgSamplingEnabled) {
+      resetStallGuardStats();
+    }
+    Serial.printf("SG sampling %s interval_ms=%lu\n", sgSamplingEnabled ? "ON" : "OFF", sgSampleIntervalMs);
+    return;
+  }
+
+  if (command.startsWith("sgint")) {
+    uint32_t value = 0;
+    if (!parseUnsignedLongCommand(trimmed, "sgint", value) || value == 0UL || value > 60000UL) {
+      Serial.println("Usage: sgint <ms>, range 1..60000");
+      return;
+    }
+    sgSampleIntervalMs = value;
+    Serial.printf("SG sample interval set: %lu ms\n", sgSampleIntervalMs);
     return;
   }
 
@@ -399,7 +512,7 @@ void AppController::processSerialLine(const String& line) {
     return;
   }
 
-  Serial.printf("Unknown command '%s'. Use h, 1, 5, b, s, on, off, v <mm/s>, a <mm/s2>, profile trap|direct, i <mA>, mode stealth|spread, microstep 16|8, or m <mm> [mm/s].\n", trimmed.c_str());
+  Serial.printf("Unknown command '%s'. Use h, 1, 5, b, s, on, off, v <mm/s>, a <mm/s2>, profile trap|direct, i <mA>, mode stealth|spread, microstep 16|8, m <mm> [mm/s], sg, mt, tmcv, sgreset, sgthrs <0-255>, tcool <0-1048575>, sgen <0|1>, sglog <0|1>, or sgint <ms>.\n", trimmed.c_str());
 }
 
 bool AppController::parseSpeedCommand(const String& line, float& speedMmS) const {
@@ -520,6 +633,46 @@ bool AppController::parseUnsignedCommand(const String& line, uint16_t& value) co
   return true;
 }
 
+bool AppController::parseUnsignedLongCommand(const String& line, const char* prefix, uint32_t& value) const {
+  String command = line;
+  command.toLowerCase();
+  const String prefixText(prefix);
+  if (!command.startsWith(prefixText)) {
+    return false;
+  }
+
+  String args = line.substring(prefixText.length());
+  args.trim();
+  if (args.length() == 0 || args.length() >= 16) {
+    return false;
+  }
+
+  char buffer[16];
+  args.toCharArray(buffer, sizeof(buffer));
+
+  char* cursor = buffer;
+  while (isspace(static_cast<unsigned char>(*cursor))) {
+    ++cursor;
+  }
+
+  char* end = nullptr;
+  const unsigned long parsed = strtoul(cursor, &end, 10);
+  if (end == cursor || parsed > 4294967295UL) {
+    return false;
+  }
+
+  cursor = end;
+  while (isspace(static_cast<unsigned char>(*cursor))) {
+    ++cursor;
+  }
+  if (*cursor != '\0') {
+    return false;
+  }
+
+  value = static_cast<uint32_t>(parsed);
+  return true;
+}
+
 bool AppController::parseMoveCommand(const String& line, float& distanceMm, float& speedMmS) const {
   String args = line.substring(1);
   args.trim();
@@ -598,38 +751,49 @@ bool AppController::validateAcceleration(float accelerationMmS2) const {
   return true;
 }
 
-bool AppController::validateMoveRequest(float distanceMm, float speedMmS) const {
+bool AppController::validateMoveRequest(float distanceMm, float speedMmS) {
   if (!motorPowerEnabled_) {
+    printRejectDetail("move_validate", "motor_power_off");
     Serial.println("Move rejected: motor power is OFF. Send 'on' first, then home again.");
     return false;
   }
 
 #if ACTIVE_DRIVER == DRIVER_TMC2209
-  refreshTmcUartStatus();
-  if (!tmcUartOk) {
-    Serial.println("Move rejected: TMC2209 UART is not OK, microstep setting is not verified");
-    return false;
+  if (TMC_VALIDATE_UART_BEFORE_MOVE) {
+    char validateFailReason[64] = "OK";
+    if (!validateTmcUartForMove(validateFailReason, sizeof(validateFailReason))) {
+      if (TMC_BLOCK_MOVE_ON_UART_VALIDATE_FAIL) {
+        printRejectDetail("move_validate", validateFailReason);
+        Serial.println("Move rejected: TMC2209 UART validation failed");
+        return false;
+      }
+      Serial.printf("Move UART validation warning: %s. Continuing STEP/DIR motion.\n", validateFailReason);
+    }
   }
 #endif
 
   if (!isfinite(distanceMm) || !isfinite(speedMmS)) {
+    printRejectDetail("move_validate", "non_finite_request");
     Serial.println("Move rejected: distance and speed must be finite numbers");
     printMoveUsage();
     return false;
   }
 
   if (!validateMoveSpeed(speedMmS)) {
+    printRejectDetail("move_validate", "speed_out_of_range");
     printMoveUsage();
     return false;
   }
 
   if (state_ != State::Ready) {
+    printRejectDetail("move_validate", "state_not_ready");
     Serial.printf("Move rejected: state=%s, homed=%s\n", stateName(), axis_.isHomed() ? "true" : "false");
     return false;
   }
 
   const float targetMm = axis_.currentPositionMm() + distanceMm;
   if (!axis_.isWithinSoftLimit(targetMm)) {
+    printRejectDetail("move_validate", "soft_limit");
     Serial.printf("Move rejected: target %.2f mm is outside %.2f..%.2f mm\n", targetMm, X_MIN_MM, X_MAX_MM);
     return false;
   }
@@ -646,6 +810,8 @@ void AppController::printMoveUsage() const {
 
 void AppController::setMotorPower(bool enabled) {
   motion_.stop();
+  sgCaptureActive = false;
+  motion_.resetTimingStats();
   if (state_ == State::Homing) {
     homing_.reset();
   }
@@ -676,10 +842,14 @@ void AppController::setMotorPower(bool enabled) {
 
 void AppController::setRuntimeCurrent(uint16_t currentMa) {
   if (state_ == State::Moving || state_ == State::Homing) {
+    printRejectDetail("current_set", "state_busy");
+    printCurrentStatusCsv("REJECTED_STATE");
     Serial.printf("Current rejected: state=%s\n", stateName());
     return;
   }
   if (currentMa < TEST_CURRENT_MIN_MA || currentMa > TEST_CURRENT_MAX_MA) {
+    printRejectDetail("current_set", "out_of_range");
+    printCurrentStatusCsv("REJECTED_RANGE");
     Serial.printf("Current rejected: %u mA is outside %u..%u mA\n",
                   currentMa,
                   TEST_CURRENT_MIN_MA,
@@ -690,19 +860,30 @@ void AppController::setRuntimeCurrent(uint16_t currentMa) {
 #if ACTIVE_DRIVER == DRIVER_TMC2209
   refreshTmcUartStatus();
   if (!tmcUartOk) {
+    printRejectDetail("current_set", "tmc_uart_not_ok");
+    printCurrentStatusCsv("REJECTED_UART");
     Serial.println("Current rejected: TMC2209 UART is not OK");
     return;
   }
   tmcRuntimeRmsCurrentMa = currentMa;
   applyTmc2209Current(TmcDriver);
-  refreshTmcUartStatus();
+  for (uint8_t attempt = 0; attempt < 3; ++attempt) {
+    delay(50);
+    refreshTmcUartStatus();
+    if (tmcUartOk) {
+      break;
+    }
+    applyTmc2209Current(TmcDriver);
+  }
   Serial.printf("TMC2209 current set: requestedRms=%u mA estimatedRun=%.0f mA estimatedHold=%.0f mA uart=%s\n",
                 tmcRuntimeRmsCurrentMa,
                 tmcConfiguredRunRmsMa,
                 tmcConfiguredHoldRmsMa,
                 tmcUartOk ? "OK" : "FAIL");
+  printCurrentStatusCsv(tmcUartOk ? "OK" : "UART_FAIL");
 #else
   Serial.println("Current command ignored: ACTIVE_DRIVER is not TMC2209");
+  printCurrentStatusCsv("NO_TMC2209");
 #endif
 }
 
@@ -750,6 +931,8 @@ void AppController::setMicrosteps(uint16_t microsteps) {
   axis_.setStepsPerMm(runtimeStepsPerMm);
   axis_.setHomed(false);
   motion_.stop();
+  sgCaptureActive = false;
+  motion_.resetTimingStats();
   TmcDriver.microsteps(runtimeMicrosteps);
   refreshTmcUartStatus();
   state_ = State::NotHomed;
@@ -759,6 +942,440 @@ void AppController::setMicrosteps(uint16_t microsteps) {
                 tmcUartOk ? "OK" : "FAIL");
 #else
   Serial.println("Microstep command ignored: ACTIVE_DRIVER is not TMC2209");
+#endif
+}
+
+bool AppController::readStallGuardResult(uint16_t& sgResult) {
+#if ACTIVE_DRIVER == DRIVER_TMC2209
+  if (!tmcUartOk) {
+    return false;
+  }
+  sgResult = TmcDriver.SG_RESULT();
+  return true;
+#else
+  (void)sgResult;
+  return false;
+#endif
+}
+
+void AppController::updateStallGuardStats() {
+#if ACTIVE_DRIVER == DRIVER_TMC2209
+  const uint32_t nowMs = millis();
+  const bool captureWindowActive = sgCaptureActive
+                                   && sgSamplingEnabled
+                                   && state_ == State::Moving
+                                   && motion_.isMoving()
+                                   && nowMs - sgCaptureStartedMs >= SG_IGNORE_AFTER_MOVE_START_MS;
+
+  if (captureWindowActive && nowMs - lastSgUpdateMs >= sgSampleIntervalMs) {
+    lastSgUpdateMs = nowMs;
+
+    uint16_t sgResult = 0;
+    if (readStallGuardResult(sgResult)) {
+      sgCurrent = sgResult;
+      sgCurrentValid = true;
+      ++sgCount;
+      if (sgResult == 0) {
+        ++sgZeroCount;
+      } else if (!sgStatsHaveValidSample) {
+        sgMinValid = sgResult;
+        sgMaxValid = sgResult;
+        sgStatsHaveValidSample = true;
+        sgSumValid += sgResult;
+        ++sgValidCount;
+        if (sgResult < SG_LOW_TH_50) {
+          ++sgLowCount50;
+        }
+        if (sgResult < SG_LOW_TH_100) {
+          ++sgLowCount100;
+        }
+        if (sgResult < SG_LOW_TH_150) {
+          ++sgLowCount150;
+        }
+      } else {
+        if (sgResult < sgMinValid) {
+          sgMinValid = sgResult;
+        }
+        if (sgResult > sgMaxValid) {
+          sgMaxValid = sgResult;
+        }
+        sgSumValid += sgResult;
+        ++sgValidCount;
+        if (sgResult < SG_LOW_TH_50) {
+          ++sgLowCount50;
+        }
+        if (sgResult < SG_LOW_TH_100) {
+          ++sgLowCount100;
+        }
+        if (sgResult < SG_LOW_TH_150) {
+          ++sgLowCount150;
+        }
+      }
+    } else {
+      sgCurrentValid = false;
+      if (nowMs - lastSgErrorMs >= 1000) {
+        lastSgErrorMs = nowMs;
+        Serial.println("SG_ERROR,reason=uart_not_ok");
+      }
+    }
+  }
+
+  if (sgLogEnabled && nowMs - lastSgLogMs >= sgLogIntervalMs) {
+    lastSgLogMs = nowMs;
+    if (!sgStatsHaveValidSample) {
+      if (sgCurrentValid) {
+        Serial.printf("SGLOG,t_ms=%lu,sg=%u,sg_min=NA,sg_max=NA,sg_avg=NA,sg_count=%lu,sg_min_valid=NA,sg_max_valid=NA,sg_avg_valid=NA,sg_valid_count=%lu,sg_zero_count=%lu,sg_low_count_50=%lu,sg_low_count_100=%lu,sg_low_count_150=%lu,sg_low_ratio_50=NA,sg_low_ratio_100=NA,sg_low_ratio_150=NA,diag=NA\n",
+                      nowMs,
+                      sgCurrent,
+                      sgCount,
+                      sgValidCount,
+                      sgZeroCount,
+                      sgLowCount50,
+                      sgLowCount100,
+                      sgLowCount150);
+      } else {
+        Serial.printf("SGLOG,t_ms=%lu,sg=NA,sg_min=NA,sg_max=NA,sg_avg=NA,sg_count=%lu,sg_min_valid=NA,sg_max_valid=NA,sg_avg_valid=NA,sg_valid_count=%lu,sg_zero_count=%lu,sg_low_count_50=%lu,sg_low_count_100=%lu,sg_low_count_150=%lu,sg_low_ratio_50=NA,sg_low_ratio_100=NA,sg_low_ratio_150=NA,diag=NA\n",
+                      nowMs,
+                      sgCount,
+                      sgValidCount,
+                      sgZeroCount,
+                      sgLowCount50,
+                      sgLowCount100,
+                      sgLowCount150);
+      }
+    } else {
+      const float sgAvgValid = static_cast<float>(static_cast<double>(sgSumValid) / static_cast<double>(sgValidCount));
+      const float sgLowRatio50 = static_cast<float>(static_cast<double>(sgLowCount50) / static_cast<double>(sgValidCount));
+      const float sgLowRatio100 = static_cast<float>(static_cast<double>(sgLowCount100) / static_cast<double>(sgValidCount));
+      const float sgLowRatio150 = static_cast<float>(static_cast<double>(sgLowCount150) / static_cast<double>(sgValidCount));
+      if (sgCurrentValid) {
+        Serial.printf("SGLOG,t_ms=%lu,sg=%u,sg_min=%u,sg_max=%u,sg_avg=%.1f,sg_count=%lu,sg_min_valid=%u,sg_max_valid=%u,sg_avg_valid=%.1f,sg_valid_count=%lu,sg_zero_count=%lu,sg_low_count_50=%lu,sg_low_count_100=%lu,sg_low_count_150=%lu,sg_low_ratio_50=%.4f,sg_low_ratio_100=%.4f,sg_low_ratio_150=%.4f,diag=NA\n",
+                      nowMs,
+                      sgCurrent,
+                      sgMinValid,
+                      sgMaxValid,
+                      sgAvgValid,
+                      sgCount,
+                      sgMinValid,
+                      sgMaxValid,
+                      sgAvgValid,
+                      sgValidCount,
+                      sgZeroCount,
+                      sgLowCount50,
+                      sgLowCount100,
+                      sgLowCount150,
+                      sgLowRatio50,
+                      sgLowRatio100,
+                      sgLowRatio150);
+      } else {
+        Serial.printf("SGLOG,t_ms=%lu,sg=NA,sg_min=%u,sg_max=%u,sg_avg=%.1f,sg_count=%lu,sg_min_valid=%u,sg_max_valid=%u,sg_avg_valid=%.1f,sg_valid_count=%lu,sg_zero_count=%lu,sg_low_count_50=%lu,sg_low_count_100=%lu,sg_low_count_150=%lu,sg_low_ratio_50=%.4f,sg_low_ratio_100=%.4f,sg_low_ratio_150=%.4f,diag=NA\n",
+                      nowMs,
+                      sgMinValid,
+                      sgMaxValid,
+                      sgAvgValid,
+                      sgCount,
+                      sgMinValid,
+                      sgMaxValid,
+                      sgAvgValid,
+                      sgValidCount,
+                      sgZeroCount,
+                      sgLowCount50,
+                      sgLowCount100,
+                      sgLowCount150,
+                      sgLowRatio50,
+                      sgLowRatio100,
+                      sgLowRatio150);
+      }
+    }
+  }
+#endif
+}
+
+void AppController::resetStallGuardStats() {
+#if ACTIVE_DRIVER == DRIVER_TMC2209
+  sgCurrentValid = false;
+  sgStatsHaveValidSample = false;
+  sgCurrent = 0;
+  sgMinValid = 0;
+  sgMaxValid = 0;
+  sgSumValid = 0;
+  sgCount = 0;
+  sgValidCount = 0;
+  sgZeroCount = 0;
+  sgLowCount50 = 0;
+  sgLowCount100 = 0;
+  sgLowCount150 = 0;
+  sgCaptureActive = false;
+  sgCaptureStartedMs = 0;
+  motion_.resetTimingStats();
+  moveStartLimitState = "NA";
+  moveEndLimitState = "NA";
+  timeoutLimitState = "NA";
+  limitFirstTriggerTiming = "NONE";
+  limitTransitionCount = 0;
+  moveLimitStateInitialized = false;
+  lastSgUpdateMs = millis();
+#endif
+}
+
+void AppController::printStallGuardStatus() {
+#if ACTIVE_DRIVER == DRIVER_TMC2209
+  if (!sgStatsHaveValidSample) {
+    if (sgCurrentValid) {
+      Serial.printf("SG_RESULT=%u,SG_MIN=NA,SG_MAX=NA,SG_AVG=NA,SG_COUNT=%lu,SG_MIN_VALID=NA,SG_MAX_VALID=NA,SG_AVG_VALID=NA,SG_VALID_COUNT=%lu,SG_ZERO_COUNT=%lu,SGTHRS=%u,TCOOLTHRS=%lu,DIAG=NA,DIAG_TRIGGERED=NA\n",
+                    sgCurrent,
+                    sgCount,
+                    sgValidCount,
+                    sgZeroCount,
+                    sgThreshold,
+                    sgTcoolThreshold);
+    } else {
+      Serial.printf("SG_RESULT=NA,SG_MIN=NA,SG_MAX=NA,SG_AVG=NA,SG_COUNT=%lu,SG_MIN_VALID=NA,SG_MAX_VALID=NA,SG_AVG_VALID=NA,SG_VALID_COUNT=%lu,SG_ZERO_COUNT=%lu,SGTHRS=%u,TCOOLTHRS=%lu,DIAG=NA,DIAG_TRIGGERED=NA\n",
+                    sgCount,
+                    sgValidCount,
+                    sgZeroCount,
+                    sgThreshold,
+                    sgTcoolThreshold);
+    }
+    return;
+  }
+
+  const float sgAvgValid = static_cast<float>(static_cast<double>(sgSumValid) / static_cast<double>(sgValidCount));
+  if (sgCurrentValid) {
+    Serial.printf("SG_RESULT=%u,SG_MIN=%u,SG_MAX=%u,SG_AVG=%.1f,SG_COUNT=%lu,SG_MIN_VALID=%u,SG_MAX_VALID=%u,SG_AVG_VALID=%.1f,SG_VALID_COUNT=%lu,SG_ZERO_COUNT=%lu,SGTHRS=%u,TCOOLTHRS=%lu,DIAG=NA,DIAG_TRIGGERED=NA\n",
+                  sgCurrent,
+                  sgMinValid,
+                  sgMaxValid,
+                  sgAvgValid,
+                  sgCount,
+                  sgMinValid,
+                  sgMaxValid,
+                  sgAvgValid,
+                  sgValidCount,
+                  sgZeroCount,
+                  sgThreshold,
+                  sgTcoolThreshold);
+  } else {
+    Serial.printf("SG_RESULT=NA,SG_MIN=%u,SG_MAX=%u,SG_AVG=%.1f,SG_COUNT=%lu,SG_MIN_VALID=%u,SG_MAX_VALID=%u,SG_AVG_VALID=%.1f,SG_VALID_COUNT=%lu,SG_ZERO_COUNT=%lu,SGTHRS=%u,TCOOLTHRS=%lu,DIAG=NA,DIAG_TRIGGERED=NA\n",
+                  sgMinValid,
+                  sgMaxValid,
+                  sgAvgValid,
+                  sgCount,
+                  sgMinValid,
+                  sgMaxValid,
+                  sgAvgValid,
+                  sgValidCount,
+                  sgZeroCount,
+                  sgThreshold,
+                  sgTcoolThreshold);
+  }
+#else
+  Serial.println("SG_RESULT=NA,SG_MIN=NA,SG_MAX=NA,SG_AVG=NA,SG_COUNT=0,SG_MIN_VALID=NA,SG_MAX_VALID=NA,SG_AVG_VALID=NA,SG_VALID_COUNT=0,SG_ZERO_COUNT=0,SGTHRS=NA,TCOOLTHRS=NA,DIAG=NA,DIAG_TRIGGERED=NA");
+#endif
+}
+
+void AppController::printStallGuardSummary() {
+#if ACTIVE_DRIVER == DRIVER_TMC2209
+  const uint32_t timingCount = motion_.timingUpdateCount();
+  const float timingAvgGapUs = motion_.timingAvgUpdateGapUs();
+  const String timingCountText = timingCount == 0 ? "NA" : String(timingCount);
+  const String timingMaxGapText = timingCount == 0 ? "NA" : String(motion_.timingMaxUpdateGapUs());
+  const String timingAvgGapText = isnan(timingAvgGapUs) ? "NA" : String(timingAvgGapUs, 1);
+
+  if (!sgStatsHaveValidSample) {
+    Serial.printf("TEST_SG_SUMMARY,sg_min=NA,sg_max=NA,sg_avg=NA,sg_count=%lu,sg_min_valid=NA,sg_max_valid=NA,sg_avg_valid=NA,sg_valid_count=%lu,sg_zero_count=%lu,sg_low_count_50=%lu,sg_low_count_100=%lu,sg_low_count_150=%lu,sg_low_ratio_50=NA,sg_low_ratio_100=NA,sg_low_ratio_150=NA,motion_update_count=%s,max_update_gap_us=%s,avg_update_gap_us=%s,diag_triggered=NA,sgthrs=%u,tcoolthrs=%lu\n",
+                  sgCount,
+                  sgValidCount,
+                  sgZeroCount,
+                  sgLowCount50,
+                  sgLowCount100,
+                  sgLowCount150,
+                  timingCountText.c_str(),
+                  timingMaxGapText.c_str(),
+                  timingAvgGapText.c_str(),
+                  sgThreshold,
+                  sgTcoolThreshold);
+    return;
+  }
+
+  const float sgAvgValid = static_cast<float>(static_cast<double>(sgSumValid) / static_cast<double>(sgValidCount));
+  const float sgLowRatio50 = static_cast<float>(static_cast<double>(sgLowCount50) / static_cast<double>(sgValidCount));
+  const float sgLowRatio100 = static_cast<float>(static_cast<double>(sgLowCount100) / static_cast<double>(sgValidCount));
+  const float sgLowRatio150 = static_cast<float>(static_cast<double>(sgLowCount150) / static_cast<double>(sgValidCount));
+  Serial.printf("TEST_SG_SUMMARY,sg_min=%u,sg_max=%u,sg_avg=%.1f,sg_count=%lu,sg_min_valid=%u,sg_max_valid=%u,sg_avg_valid=%.1f,sg_valid_count=%lu,sg_zero_count=%lu,sg_low_count_50=%lu,sg_low_count_100=%lu,sg_low_count_150=%lu,sg_low_ratio_50=%.4f,sg_low_ratio_100=%.4f,sg_low_ratio_150=%.4f,motion_update_count=%s,max_update_gap_us=%s,avg_update_gap_us=%s,diag_triggered=NA,sgthrs=%u,tcoolthrs=%lu\n",
+                sgMinValid,
+                sgMaxValid,
+                sgAvgValid,
+                sgCount,
+                sgMinValid,
+                sgMaxValid,
+                sgAvgValid,
+                sgValidCount,
+                sgZeroCount,
+                sgLowCount50,
+                sgLowCount100,
+                sgLowCount150,
+                sgLowRatio50,
+                sgLowRatio100,
+                sgLowRatio150,
+                timingCountText.c_str(),
+                timingMaxGapText.c_str(),
+                timingAvgGapText.c_str(),
+                sgThreshold,
+                sgTcoolThreshold);
+#else
+  Serial.println("TEST_SG_SUMMARY,sg_min=NA,sg_max=NA,sg_avg=NA,sg_count=NA,sg_min_valid=NA,sg_max_valid=NA,sg_avg_valid=NA,sg_valid_count=NA,sg_zero_count=NA,sg_low_count_50=NA,sg_low_count_100=NA,sg_low_count_150=NA,sg_low_ratio_50=NA,sg_low_ratio_100=NA,sg_low_ratio_150=NA,motion_update_count=NA,max_update_gap_us=NA,avg_update_gap_us=NA,diag_triggered=NA,sgthrs=NA,tcoolthrs=NA");
+#endif
+}
+
+void AppController::printMotionTimingSummary() {
+  const uint32_t timingCount = motion_.timingUpdateCount();
+  const float timingAvgGapUs = motion_.timingAvgUpdateGapUs();
+  const String timingCountText = timingCount == 0 ? "NA" : String(timingCount);
+  const String timingMaxGapText = timingCount == 0 ? "NA" : String(motion_.timingMaxUpdateGapUs());
+  const String timingAvgGapText = isnan(timingAvgGapUs) ? "NA" : String(timingAvgGapUs, 1);
+  const String timeoutPositionText = state_ == State::Moving ? String(axis_.currentPositionMm(), 4) : "NA";
+  const String timeoutTargetText = state_ == State::Moving ? String(motion_.targetMm(), 4) : "NA";
+  const String timeoutRemainingText = state_ == State::Moving ? String(motion_.remainingSteps()) : "NA";
+  Serial.printf("MOTION_TIMING_SUMMARY,motion_update_count=%s,max_update_gap_us=%s,avg_update_gap_us=%s,move_start_limit_state=%s,move_end_limit_state=%s,home_end_limit_state=%s,timeout_limit_state=%s,limit_transition_count=%lu,limit_first_trigger_timing=%s,timeout_current_position=%s,timeout_target_position=%s,timeout_remaining_steps=%s\n",
+                timingCountText.c_str(),
+                timingMaxGapText.c_str(),
+                timingAvgGapText.c_str(),
+                moveStartLimitState,
+                moveEndLimitState,
+                homeEndLimitState,
+                timeoutLimitState,
+                limitTransitionCount,
+                limitFirstTriggerTiming,
+                timeoutPositionText.c_str(),
+                timeoutTargetText.c_str(),
+                timeoutRemainingText.c_str());
+}
+
+void AppController::printRejectDetail(const char* stage, const char* reason) {
+#if ACTIVE_DRIVER == DRIVER_TMC2209
+  const uint16_t currentBeforeRe = tmcRuntimeRmsCurrentMa;
+#else
+  const uint16_t currentBeforeRe = 0;
+#endif
+  Serial.printf("RE_DETAIL,re_stage=%s,re_reason=%s,current_before_re=%u,position_before_re=%.4f,limit_state_before_re=%s,motion_state_before_re=%s\n",
+                stage,
+                reason,
+                currentBeforeRe,
+                axis_.currentPositionMm(),
+                limit_.isPressedDebounced() ? "ON" : "OFF",
+                motion_.stateName());
+}
+
+void AppController::printCurrentStatusCsv(const char* driverStatus) {
+#if ACTIVE_DRIVER == DRIVER_TMC2209
+  Serial.printf("CURRENT_STATUS,requested_current_ma=%u,applied_current_ma=%u,config_tmc_uart_ok=%u,tmc_uart_ok=%u,driver_status=%s\n",
+                tmcRuntimeRmsCurrentMa,
+                TmcDriver.rms_current(),
+                tmcUartOk ? 1 : 0,
+                tmcUartOk ? 1 : 0,
+                driverStatus);
+#else
+  (void)driverStatus;
+  Serial.println("CURRENT_STATUS,requested_current_ma=NA,applied_current_ma=NA,config_tmc_uart_ok=NA,tmc_uart_ok=NA,driver_status=NO_TMC2209");
+#endif
+}
+
+bool AppController::validateTmcUartForMove(char* failReason, size_t failReasonSize) {
+#if ACTIVE_DRIVER == DRIVER_TMC2209
+  if (failReasonSize > 0) {
+    failReason[0] = '\0';
+  }
+  const uint8_t ifcntBefore = TmcDriver.IFCNT();
+  const uint8_t connectionResult = TmcDriver.test_connection();
+  const uint8_t ifcntAfter = TmcDriver.IFCNT();
+  const uint8_t ifcntDelta = static_cast<uint8_t>(ifcntAfter - ifcntBefore);
+  const bool validateOk = connectionResult == 0;
+  tmcUartOk = validateOk;
+
+  const uint8_t gstat = TmcDriver.GSTAT();
+  const uint32_t drvStatus = TmcDriver.DRV_STATUS();
+  const uint16_t appliedCurrentMa = TmcDriver.rms_current();
+  const int32_t currentErrorMa = static_cast<int32_t>(appliedCurrentMa) - static_cast<int32_t>(tmcRuntimeRmsCurrentMa);
+  const float currentErrorRatio = tmcRuntimeRmsCurrentMa > 0
+                                      ? static_cast<float>(currentErrorMa) / static_cast<float>(tmcRuntimeRmsCurrentMa)
+                                      : 0.0F;
+  const uint16_t currentToleranceMa = static_cast<uint16_t>(tmcRuntimeRmsCurrentMa / 10) > 50
+                                          ? static_cast<uint16_t>(tmcRuntimeRmsCurrentMa / 10)
+                                          : 50;
+  const bool currentWithinTolerance = labs(currentErrorMa) <= currentToleranceMa;
+
+  const char* detail = "OK";
+  if (!validateOk) {
+    snprintf(failReason, failReasonSize, "test_connection_%u_ifcnt_delta_%u", connectionResult, ifcntDelta);
+    detail = failReason;
+  } else if (!currentWithinTolerance) {
+    detail = "current_mismatch_nonfatal";
+  }
+
+  Serial.printf("VALIDATE_TMC,validate_tmc_uart_ok=%u,validate_driver_status=%s,validate_ifcnt_before=%u,validate_ifcnt_after=%u,validate_ifcnt_delta=%u,validate_gstat=%u,validate_drv_status=%lu,validate_requested_current_ma=%u,validate_applied_current_ma=%u,validate_current_error_ma=%ld,validate_current_error_ratio=%.4f,validate_current_tolerance_ma=%u,validate_fail_reason_detail=%s\n",
+                validateOk ? 1 : 0,
+                validateOk ? "OK" : "UART_FAIL",
+                ifcntBefore,
+                ifcntAfter,
+                ifcntDelta,
+                gstat,
+                static_cast<unsigned long>(drvStatus),
+                tmcRuntimeRmsCurrentMa,
+                appliedCurrentMa,
+                static_cast<long>(currentErrorMa),
+                currentErrorRatio,
+                currentToleranceMa,
+                detail);
+
+  if (validateOk && failReasonSize > 0) {
+    snprintf(failReason, failReasonSize, "OK");
+  }
+  return validateOk;
+#else
+  snprintf(failReason, failReasonSize, "no_tmc2209");
+  Serial.println("VALIDATE_TMC,validate_tmc_uart_ok=NA,validate_driver_status=NO_TMC2209,validate_ifcnt_before=NA,validate_ifcnt_after=NA,validate_ifcnt_delta=NA,validate_gstat=NA,validate_drv_status=NA,validate_requested_current_ma=NA,validate_applied_current_ma=NA,validate_current_error_ma=NA,validate_current_error_ratio=NA,validate_current_tolerance_ma=NA,validate_fail_reason_detail=no_tmc2209");
+  return false;
+#endif
+}
+
+bool AppController::setStallGuardThreshold(uint16_t sgthrs) {
+#if ACTIVE_DRIVER == DRIVER_TMC2209
+  refreshTmcUartStatus();
+  if (!tmcUartOk) {
+    Serial.println("SGTHRS rejected: TMC2209 UART is not OK");
+    return false;
+  }
+  sgThreshold = static_cast<uint8_t>(sgthrs);
+  TmcDriver.SGTHRS(sgThreshold);
+  refreshTmcUartStatus();
+  Serial.printf("SGTHRS set: %u uart=%s\n", sgThreshold, tmcUartOk ? "OK" : "FAIL");
+  printStallGuardStatus();
+  return true;
+#else
+  (void)sgthrs;
+  Serial.println("SGTHRS command ignored: ACTIVE_DRIVER is not TMC2209");
+  return false;
+#endif
+}
+
+bool AppController::setStallGuardTcoolThreshold(uint32_t tcoolthrs) {
+#if ACTIVE_DRIVER == DRIVER_TMC2209
+  refreshTmcUartStatus();
+  if (!tmcUartOk) {
+    Serial.println("TCOOLTHRS rejected: TMC2209 UART is not OK");
+    return false;
+  }
+  sgTcoolThreshold = tcoolthrs;
+  TmcDriver.TCOOLTHRS(sgTcoolThreshold);
+  refreshTmcUartStatus();
+  Serial.printf("TCOOLTHRS set: %lu uart=%s\n", sgTcoolThreshold, tmcUartOk ? "OK" : "FAIL");
+  printStallGuardStatus();
+  return true;
+#else
+  (void)tcoolthrs;
+  Serial.println("TCOOLTHRS command ignored: ACTIVE_DRIVER is not TMC2209");
+  return false;
 #endif
 }
 
@@ -783,6 +1400,8 @@ void AppController::startHoming() {
   }
 
   homing_.reset();
+  sgCaptureActive = false;
+  motion_.resetTimingStats();
   homing_.start();
   lastHomingLogState_ = homing_.state();
   state_ = State::Homing;
@@ -806,11 +1425,23 @@ void AppController::startMoveRelative(float mm, float speedMmS) {
 
   const float targetMm = axis_.currentPositionMm() + mm;
   if (!motion_.moveRelativeMm(mm, speedMmS)) {
+    sgCaptureActive = false;
     state_ = State::Error;
     Serial.println("Move rejected by motion controller");
     return;
   }
 
+  sgCaptureActive = mm > 0.0F;
+  sgCaptureStartedMs = millis();
+  lastSgUpdateMs = sgCaptureStartedMs;
+  motion_.resetTimingStats();
+  moveStartLimitState = limit_.isPressedDebounced() ? "ON" : "OFF";
+  moveEndLimitState = "NA";
+  timeoutLimitState = "NA";
+  limitFirstTriggerTiming = limit_.isPressedDebounced() ? "START" : "NONE";
+  limitTransitionCount = 0;
+  lastMoveLimitState = limit_.isPressedDebounced();
+  moveLimitStateInitialized = true;
   state_ = State::Moving;
   Serial.printf("Move started: delta=%.2f mm speed=%.2f mm/s accel=%.2f mm/s^2 profile=%s target=%.2f mm softLimit=%.2f..%.2f mm microsteps=1/%u stepsPerMm=%.2f\n",
                 mm,
@@ -845,10 +1476,12 @@ void AppController::updateState() {
       }
       if (homing_.isDone()) {
         state_ = State::Ready;
+        homeEndLimitState = limit_.isPressedDebounced() ? "ON" : "OFF";
         Serial.println("Homing complete. X=0.00 mm");
         printStatus();
       } else if (homing_.hasError()) {
         state_ = State::Error;
+        homeEndLimitState = limit_.isPressedDebounced() ? "ON" : "OFF";
         Serial.println("Homing error");
         printStatus();
       }
@@ -862,13 +1495,30 @@ void AppController::updateState() {
       break;
 
     case State::Moving:
+      if (moveLimitStateInitialized) {
+        const bool currentLimitState = limit_.isPressedDebounced();
+        if (currentLimitState != lastMoveLimitState) {
+          ++limitTransitionCount;
+          if (currentLimitState && strcmp(limitFirstTriggerTiming, "NONE") == 0) {
+            limitFirstTriggerTiming = "DURING_MOVE";
+          }
+          lastMoveLimitState = currentLimitState;
+        }
+      }
       motion_.update();
       if (!motion_.isMoving() && !motion_.hasError()) {
         state_ = State::Ready;
+        moveEndLimitState = limit_.isPressedDebounced() ? "ON" : "OFF";
+        printMotionTimingSummary();
+        printStallGuardSummary();
+        sgCaptureActive = false;
         Serial.println("Move complete");
         printStatus();
       } else if (motion_.hasError()) {
         state_ = State::Error;
+        moveEndLimitState = limit_.isPressedDebounced() ? "ON" : "OFF";
+        printMotionTimingSummary();
+        printStallGuardSummary();
         Serial.printf("Motion error detail: pos=%.4fmm steps=%ld target=%.4fmm targetSteps=%ld remainingSteps=%ld limitRaw=%s limitDebounced=%s\n",
                       axis_.currentPositionMm(),
                       axis_.currentPositionSteps(),
@@ -877,6 +1527,7 @@ void AppController::updateState() {
                       motion_.remainingSteps(),
                       limit_.isPressedRaw() ? "ON" : "OFF",
                       limit_.isPressedDebounced() ? "ON" : "OFF");
+        sgCaptureActive = false;
         Serial.println("Motion error: limit switch or soft limit stopped movement");
         printStatus();
       }

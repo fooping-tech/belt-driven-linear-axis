@@ -26,6 +26,17 @@ constexpr bool TMC_CURRENT_VSENSE = false;
 constexpr uint8_t TMC_IHOLDDELAY = 1;
 constexpr uint8_t TMC_TPOWERDOWN = 20;
 constexpr uint32_t TMC_STARTUP_REAPPLY_DELAY_MS = 100;
+constexpr bool TMC_BLOCK_MOVE_ON_UART_VALIDATE_FAIL = false;
+constexpr bool TMC_VALIDATE_UART_BEFORE_MOVE = false;
+constexpr uint8_t TMC_SGTHRS_DEFAULT = 80;
+constexpr uint32_t TMC_TCOOLTHRS_DEFAULT = 0xFFFFF;
+constexpr uint32_t SG_UPDATE_INTERVAL_MS = 20;
+constexpr uint32_t SG_LOG_INTERVAL_MS_DEFAULT = 100;
+constexpr uint32_t SG_IGNORE_AFTER_MOVE_START_MS = 200;
+constexpr bool SG_POLLING_ENABLED_DEFAULT = true;
+constexpr uint16_t SG_LOW_TH_50 = 50;
+constexpr uint16_t SG_LOW_TH_100 = 100;
+constexpr uint16_t SG_LOW_TH_150 = 150;
 
 constexpr uint32_t SERIAL_BAUDRATE = 115200;
 constexpr uint32_t STEP_PULSE_US = 5;

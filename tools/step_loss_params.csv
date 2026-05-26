@@ -1,4 +1,7 @@
 speed_mm_s,accel_mm_s2,current_ma,chop_mode,microsteps
-140,300,1400,stealth,16
-140,300,1400,spread,16
-140,500,1400,spread,16
+50,100,500,stealth,16
+50,200,500,stealth,16
+50,300,500,stealth,16
+100,100,500,stealth,16
+100,300,500,stealth,16
+140,100,1400,stealth,16

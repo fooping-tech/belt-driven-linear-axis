@@ -35,6 +35,18 @@ class AppController {
   void setRuntimeCurrent(uint16_t currentMa);
   void setChopMode(bool spreadCycle);
   void setMicrosteps(uint16_t microsteps);
+  bool readStallGuardResult(uint16_t& sgResult);
+  void updateStallGuardStats();
+  void resetStallGuardStats();
+  void printStallGuardStatus();
+  void printStallGuardSummary();
+  void printMotionTimingSummary();
+  void printRejectDetail(const char* stage, const char* reason);
+  void printCurrentStatusCsv(const char* driverStatus);
+  bool validateTmcUartForMove(char* failReason, size_t failReasonSize);
+  bool setStallGuardThreshold(uint16_t sgthrs);
+  bool setStallGuardTcoolThreshold(uint32_t tcoolthrs);
+  bool parseUnsignedLongCommand(const String& line, const char* prefix, uint32_t& value) const;
   void startHoming();
   void startMoveRelative(float mm);
   void startMoveRelative(float mm, float speedMmS);
@@ -44,7 +56,7 @@ class AppController {
   bool parseMoveCommand(const String& line, float& distanceMm, float& speedMmS) const;
   bool validateMoveSpeed(float speedMmS) const;
   bool validateAcceleration(float accelerationMmS2) const;
-  bool validateMoveRequest(float distanceMm, float speedMmS) const;
+  bool validateMoveRequest(float distanceMm, float speedMmS);
   void printMoveUsage() const;
   void updateState();
   void printStatus();

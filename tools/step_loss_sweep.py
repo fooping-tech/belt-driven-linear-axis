@@ -36,6 +36,87 @@ RESULT_COLUMNS = (
     "final_error_mm",
     "final_remaining_steps",
     "elapsed_sec",
+    "sg_min",
+    "sg_max",
+    "sg_avg",
+    "sg_count",
+    "sg_min_valid",
+    "sg_max_valid",
+    "sg_avg_valid",
+    "sg_valid_count",
+    "sg_zero_count",
+    "sg_low_count_50",
+    "sg_low_count_100",
+    "sg_low_count_150",
+    "sg_low_ratio_50",
+    "sg_low_ratio_100",
+    "sg_low_ratio_150",
+    "motion_update_count",
+    "max_update_gap_us",
+    "avg_update_gap_us",
+    "diag_triggered",
+    "sgthrs",
+    "tcoolthrs",
+    "test_condition_id",
+    "repeat_index",
+    "sg_enabled",
+    "sg_interval_ms",
+    "sglog_enabled",
+    "move_start_limit_state",
+    "move_end_limit_state",
+    "home_end_limit_state",
+    "timeout_limit_state",
+    "limit_transition_count",
+    "limit_first_trigger_timing",
+    "timeout_current_position",
+    "timeout_target_position",
+    "timeout_remaining_steps",
+    "requested_current_ma",
+    "applied_current_ma",
+    "tmc_uart_ok",
+    "config_tmc_uart_ok",
+    "driver_status",
+    "validate_tmc_uart_ok",
+    "validate_driver_status",
+    "validate_ifcnt_before",
+    "validate_ifcnt_after",
+    "validate_ifcnt_delta",
+    "validate_gstat",
+    "validate_drv_status",
+    "validate_requested_current_ma",
+    "validate_applied_current_ma",
+    "validate_current_error_ma",
+    "validate_current_error_ratio",
+    "validate_current_tolerance_ma",
+    "validate_fail_reason_detail",
+    "re_stage",
+    "re_reason",
+    "current_before_re",
+    "position_before_re",
+    "limit_state_before_re",
+    "motion_state_before_re",
+    "failure_detail",
+    "failure_stage",
+    "failure_evidence",
+    "timeout_stage",
+    "timeout_elapsed_ms",
+    "timeout_motion_state",
+    "timeout_last_step_time_ms",
+    "timeout_expected_duration_ms",
+    "expected_position",
+    "actual_position",
+    "abs_error_mm",
+    "error_threshold_mm",
+    "remaining_steps_threshold",
+    "limit_expected_state",
+    "limit_actual_state",
+    "limit_failure_detail",
+    "current_error_ma",
+    "current_error_ratio",
+    "current_tolerance_ma",
+    "sg_health_state",
+    "diagnostic_tags",
+    "diagnostic_comment",
 )
 
 FAILURE_LEGEND = {
@@ -57,6 +138,70 @@ class SweepParam:
     current_ma: int
     chop_mode: str
     microsteps: int
+    test_condition_id: str = "NA"
+    repeat_index: int | None = None
+    sg_enabled: int | None = None
+    sg_interval_ms: int | None = None
+    sglog_enabled: int | None = None
+    validate_only: int | None = None
+
+
+@dataclasses.dataclass
+class SgStats:
+    sg_min: int | None = None
+    sg_max: int | None = None
+    sg_avg: float | None = None
+    sg_count: int | None = None
+    sg_min_valid: int | None = None
+    sg_max_valid: int | None = None
+    sg_avg_valid: float | None = None
+    sg_valid_count: int | None = None
+    sg_zero_count: int | None = None
+    sg_low_count_50: int | None = None
+    sg_low_count_100: int | None = None
+    sg_low_count_150: int | None = None
+    sg_low_ratio_50: float | None = None
+    sg_low_ratio_100: float | None = None
+    sg_low_ratio_150: float | None = None
+    motion_update_count: int | None = None
+    max_update_gap_us: int | None = None
+    avg_update_gap_us: float | None = None
+    move_start_limit_state: str | None = None
+    move_end_limit_state: str | None = None
+    home_end_limit_state: str | None = None
+    timeout_limit_state: str | None = None
+    limit_transition_count: int | None = None
+    limit_first_trigger_timing: str | None = None
+    timeout_current_position: float | None = None
+    timeout_target_position: float | None = None
+    timeout_remaining_steps: int | None = None
+    requested_current_ma: int | None = None
+    applied_current_ma: int | None = None
+    tmc_uart_ok: str | None = None
+    config_tmc_uart_ok: str | None = None
+    driver_status: str | None = None
+    validate_tmc_uart_ok: str | None = None
+    validate_driver_status: str | None = None
+    validate_ifcnt_before: int | None = None
+    validate_ifcnt_after: int | None = None
+    validate_ifcnt_delta: int | None = None
+    validate_gstat: int | None = None
+    validate_drv_status: int | None = None
+    validate_requested_current_ma: int | None = None
+    validate_applied_current_ma: int | None = None
+    validate_current_error_ma: int | None = None
+    validate_current_error_ratio: float | None = None
+    validate_current_tolerance_ma: int | None = None
+    validate_fail_reason_detail: str | None = None
+    re_stage: str | None = None
+    re_reason: str | None = None
+    current_before_re: int | None = None
+    position_before_re: float | None = None
+    limit_state_before_re: str | None = None
+    motion_state_before_re: str | None = None
+    diag_triggered: str | None = None
+    sgthrs: int | None = None
+    tcoolthrs: int | None = None
 
 
 @dataclasses.dataclass
@@ -69,6 +214,7 @@ class TestOutcome:
     score: float
     final_error_mm: float | None
     final_remaining_steps: int | None
+    sg: SgStats
     final_status: str
     log_excerpt: list[str]
 
@@ -86,6 +232,7 @@ class SweepResult:
     final_score: float
     final_error_mm: float | None
     final_remaining_steps: int | None
+    sg: SgStats
     elapsed_sec: float
 
 
@@ -171,6 +318,10 @@ class SimulatedRunner:
     def close(self) -> None:
         return
 
+    def drain(self, duration_sec: float) -> list[str]:
+        _ = duration_sec
+        return []
+
     def send_and_wait(
         self,
         command: str,
@@ -220,8 +371,9 @@ def main() -> int:
 
     reports_dir = Path(args.reports_dir)
     reports_dir.mkdir(parents=True, exist_ok=True)
-    report_path = Path(args.report) if args.report else reports_dir / f"step_loss_sweep_{timestamp}.md"
-    result_csv_path = reports_dir / f"step_loss_sweep_{timestamp}.csv"
+    report_stem = report_stem_for_params(params)
+    report_path = Path(args.report) if args.report else reports_dir / f"{report_stem}_{timestamp}.md"
+    result_csv_path = report_path.with_suffix(".csv") if args.report else reports_dir / f"{report_stem}_{timestamp}.csv"
 
     selected_port = "simulate" if args.simulate else resolve_port(args.port)
     runner = SimulatedRunner() if args.simulate else SerialRunner(selected_port, args.baudrate)
@@ -229,9 +381,12 @@ def main() -> int:
     results: list[SweepResult] = []
     try:
         for index, param in enumerate(params, start=1):
+            runner.drain(0.2)
             prefix = f"[{index}/{len(params)}] speed={fmt_num(param.speed_mm_s)} accel={fmt_num(param.accel_mm_s2)} current={param.current_ma} mode={param.chop_mode} microsteps={param.microsteps}"
             print(prefix, flush=True)
             result = run_param(runner, param, args.return_speed, args.command_timeout, args.homing_timeout, args.limit_position_tolerance, args.limit_settle_sec, timestamp)
+            if result.final_result != "PASS":
+                runner.drain(0.5)
             results.append(result)
             print(f"  test1 => {format_test_outcome(result.test1)}", flush=True)
             print(f"  test2 => {format_test_outcome(result.test2)}", flush=True)
@@ -279,9 +434,30 @@ def main() -> int:
     return 0
 
 
+def has_sg_overhead_params(params: list[SweepParam]) -> bool:
+    for param in params:
+        if param.test_condition_id != "NA":
+            return True
+        if param.repeat_index is not None or param.sg_enabled is not None or param.sg_interval_ms is not None or param.sglog_enabled is not None:
+            return True
+    return False
+
+
+def report_stem_for_params(params: list[SweepParam]) -> str:
+    condition_ids = {param.test_condition_id for param in params}
+    if condition_ids == {"B_REPRO"}:
+        return "b_repro"
+    if condition_ids and all(condition_id.startswith("CUR_") for condition_id in condition_ids):
+        return "current_sweep"
+    if has_sg_overhead_params(params):
+        return "sg_overhead_validation"
+    return "step_loss_sweep"
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Sweep stepper parameters and generate step-loss reports.")
     parser.add_argument("--csv", default="tools/step_loss_params.csv", help="input CSV path")
+    parser.add_argument("--params", dest="csv", default=argparse.SUPPRESS, help="input CSV path alias")
     parser.add_argument("--port", default="auto", help="serial port, or auto")
     parser.add_argument("--baudrate", type=int, default=115200, help="serial baudrate")
     parser.add_argument("--return-speed", type=float, default=30.0, help="slow return speed before b moves")
@@ -326,6 +502,12 @@ def parse_param_row(row: dict[str, str], row_number: int) -> SweepParam:
         current = int_required(row, "current_ma", row_number)
         microsteps = int_required(row, "microsteps", row_number)
         chop_mode = row["chop_mode"].strip().lower()
+        test_condition_id = optional_text(row.get("test_condition_id")) or "NA"
+        repeat_index = optional_csv_int(row, "repeat_index", row_number, min_value=1)
+        sg_enabled = optional_csv_int(row, "sg_enabled", row_number, min_value=0, max_value=1)
+        sg_interval_ms = optional_csv_int(row, "sg_interval_ms", row_number, min_value=1, max_value=60000)
+        sglog_enabled = optional_csv_int(row, "sglog_enabled", row_number, min_value=0, max_value=1)
+        validate_only = optional_csv_int(row, "validate_only", row_number, min_value=0, max_value=1)
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
 
@@ -345,7 +527,19 @@ def parse_param_row(row: dict[str, str], row_number: int) -> SweepParam:
     if chop_mode == "spreadcycle":
         chop_mode = "spread"
 
-    return SweepParam(speed, accel, current, chop_mode, microsteps)
+    return SweepParam(
+        speed,
+        accel,
+        current,
+        chop_mode,
+        microsteps,
+        test_condition_id,
+        repeat_index,
+        sg_enabled,
+        sg_interval_ms,
+        sglog_enabled,
+        validate_only,
+    )
 
 
 def float_required(row: dict[str, str], name: str, row_number: int) -> float:
@@ -360,6 +554,27 @@ def int_required(row: dict[str, str], name: str, row_number: int) -> int:
     if not value:
         raise ValueError(f"Row {row_number}: {name} is required")
     return int(value)
+
+
+def optional_csv_int(
+    row: dict[str, str],
+    name: str,
+    row_number: int,
+    min_value: int | None = None,
+    max_value: int | None = None,
+) -> int | None:
+    text = optional_text(row.get(name))
+    if text is None:
+        return None
+    try:
+        value = int(text)
+    except ValueError as exc:
+        raise ValueError(f"Row {row_number}: {name} must be an integer or NA") from exc
+    if min_value is not None and value < min_value:
+        raise ValueError(f"Row {row_number}: {name} must be >= {min_value}")
+    if max_value is not None and value > max_value:
+        raise ValueError(f"Row {row_number}: {name} must be <= {max_value}")
+    return value
 
 
 def resolve_port(port: str) -> str:
@@ -395,8 +610,24 @@ def run_param(
     timestamp: str,
 ) -> SweepResult:
     start = time.monotonic()
-    test1 = run_test(runner, param, "test1", ["1", "1", "1", "1", "1"], return_speed, command_timeout, homing_timeout, limit_position_tolerance, limit_settle_sec)
-    test2 = run_test(runner, param, "test2", ["5"], return_speed, command_timeout, homing_timeout, limit_position_tolerance, limit_settle_sec)
+    if param.validate_only == 1:
+        test1 = run_current_validate_only(runner, param, "validate", limit_position_tolerance)
+        test2 = TestOutcome(
+            name="skip",
+            result="PASS",
+            failure_reason="OK",
+            final_limit_state="UNKNOWN",
+            final_limit_timing="UNKNOWN",
+            score=100.0,
+            final_error_mm=None,
+            final_remaining_steps=None,
+            sg=SgStats(),
+            final_status="",
+            log_excerpt=[],
+        )
+    else:
+        test1 = run_test(runner, param, "test1", ["1", "1", "1", "1", "1"], return_speed, command_timeout, homing_timeout, limit_position_tolerance, limit_settle_sec)
+        test2 = run_test(runner, param, "test2", ["5"], return_speed, command_timeout, homing_timeout, limit_position_tolerance, limit_settle_sec)
     final_result = "PASS" if test1.result == "PASS" and test2.result == "PASS" else "FAIL"
     if final_result == "PASS":
         failure_reason = "OK"
@@ -425,7 +656,48 @@ def run_param(
         final_score=final_score,
         final_error_mm=final_error,
         final_remaining_steps=final_remaining,
+        sg=aggregate_sg_stats(test1.sg, test2.sg),
         elapsed_sec=time.monotonic() - start,
+    )
+
+
+def run_current_validate_only(
+    runner: SerialRunner | SimulatedRunner,
+    param: SweepParam,
+    name: str,
+    limit_position_tolerance: float,
+) -> TestOutcome:
+    log: list[str] = []
+    setup_commands = [
+        (f"microstep {param.microsteps}", ("microstep set", "sim:")),
+        (f"i {param.current_ma}", ("current set", "sim:")),
+        (f"mode {param.chop_mode}", ("chop mode set", "sim:")),
+        (f"v {fmt_num(param.speed_mm_s)}", ("Default move speed set", "sim:")),
+    ]
+    for command, expect in setup_commands:
+        ok, code, lines = runner.send_and_wait(command, expect, 5.0)
+        log.extend(tag_lines(command, lines))
+        if not ok:
+            return outcome(name, "FAIL", code, "UNKNOWN", "UNKNOWN", last_status(lines), log, limit_position_tolerance)
+    ok, code, lines = runner.send_and_wait("tmcv", ("TMC validate", "sim:"), 5.0, reject_as_error=False)
+    log.extend(tag_lines("tmcv", lines))
+    if not ok:
+        return outcome(name, "FAIL", code, "UNKNOWN", "UNKNOWN", last_status(lines), log, limit_position_tolerance)
+    ok, code, lines = runner.send_and_wait("s", ("state=", "sim:"), 2.0, reject_as_error=False)
+    log.extend(tag_lines("s", lines))
+    final_status = last_status(lines)
+    return TestOutcome(
+        name=name,
+        result="PASS" if ok else "FAIL",
+        failure_reason="OK" if ok else code,
+        final_limit_state=parse_limit_state(lines),
+        final_limit_timing="VALIDATE_ONLY",
+        score=100.0 if ok else 0.0,
+        final_error_mm=final_error_mm(final_status, log),
+        final_remaining_steps=final_remaining_steps(log),
+        sg=parse_sg_stats(log),
+        final_status=final_status,
+        log_excerpt=trim_log(log),
     )
 
 
@@ -465,11 +737,33 @@ def run_test(
     if not ok:
         return outcome(name, "FAIL", code, "UNKNOWN", "UNKNOWN", last_status(lines), log, limit_position_tolerance)
 
+    sg_control_commands: list[tuple[str, tuple[str, ...]]] = []
+    if param.sglog_enabled is not None:
+        sg_control_commands.append((f"sglog {param.sglog_enabled}", ("SG log", "sim:")))
+    if param.sg_enabled is not None:
+        sg_control_commands.append((f"sgen {param.sg_enabled}", ("SG sampling", "sim:")))
+    if param.sg_interval_ms is not None:
+        sg_control_commands.append((f"sgint {param.sg_interval_ms}", ("SG sample interval set", "sim:")))
+
+    for command, expect in sg_control_commands:
+        ok, code, lines = runner.send_and_wait(command, expect, 5.0)
+        log.extend(tag_lines(command, lines))
+        if not ok:
+            return outcome(name, "FAIL", code, "UNKNOWN", "UNKNOWN", last_status(lines), log, limit_position_tolerance)
+
+    ok, code, lines = runner.send_and_wait("sgreset", ("SG stats reset", "sim:"), 5.0)
+    log.extend(tag_lines("sgreset", lines))
+    if not ok:
+        return outcome(name, "FAIL", code, "UNKNOWN", "UNKNOWN", last_status(lines), log, limit_position_tolerance)
+
     for command in forward_commands:
         ok, code, lines = runner.wait_for_move(command, command_timeout)
         log.extend(tag_lines(command, lines))
         if not ok:
+            poll_motion_timing(runner, log)
             return outcome(name, "FAIL", code, parse_limit_state(lines), "UNKNOWN", last_status(lines), log, limit_position_tolerance)
+
+    poll_motion_timing(runner, log)
 
     ok, code, lines = runner.send_and_wait(f"v {fmt_num(return_speed)}", ("Default move speed set",), 5.0)
     log.extend(tag_lines(f"v {fmt_num(return_speed)}", lines))
@@ -482,6 +776,7 @@ def run_test(
         log.extend(tag_lines("b", lines))
         final_lines = lines
         if not ok:
+            poll_motion_timing(runner, log)
             if index == 4 and code == "ME":
                 status_code, status_lines = runner.status()
                 log.extend(tag_lines("s", status_lines))
@@ -548,9 +843,411 @@ def outcome(
         score=score_result(result, final_limit_state, error_mm, tolerance_mm),
         final_error_mm=error_mm,
         final_remaining_steps=remaining_steps,
+        sg=parse_sg_stats(log),
         final_status=final_status,
         log_excerpt=trim_log(log),
     )
+
+
+def poll_motion_timing(runner: SerialRunner | SimulatedRunner, log: list[str]) -> None:
+    ok, _code, lines = runner.send_and_wait("mt", ("MOTION_TIMING_SUMMARY", "sim:"), 1.0, reject_as_error=False)
+    _ = ok
+    log.extend(tag_lines("mt", lines))
+
+
+def parse_sg_stats(lines: list[str]) -> SgStats:
+    stats = SgStats()
+    for line in lines:
+        parsed = parse_sg_key_values(line)
+        if not parsed:
+            continue
+        apply_sg_key_values(stats, parsed)
+    return stats
+
+
+def parse_sg_key_values(line: str) -> dict[str, str]:
+    text = line.strip()
+    if not (
+        text.startswith("TEST_SG_SUMMARY,")
+        or text.startswith("MOTION_TIMING_SUMMARY,")
+        or text.startswith("CURRENT_STATUS,")
+        or text.startswith("VALIDATE_TMC,")
+        or text.startswith("RE_DETAIL,")
+        or text.startswith("SGLOG,")
+        or text.startswith("SG_RESULT=")
+    ):
+        return {}
+
+    values: dict[str, str] = {}
+    for part in text.split(","):
+        if "=" not in part:
+            continue
+        key, value = part.split("=", 1)
+        values[key.strip().lower()] = value.strip()
+    return values
+
+
+def apply_sg_key_values(stats: SgStats, values: dict[str, str]) -> None:
+    sg_min = optional_int(values.get("sg_min"))
+    sg_max = optional_int(values.get("sg_max"))
+    sg_avg = optional_float(values.get("sg_avg"))
+    sg_count = optional_int(values.get("sg_count"))
+    sg_min_valid = optional_int(values.get("sg_min_valid"))
+    sg_max_valid = optional_int(values.get("sg_max_valid"))
+    sg_avg_valid = optional_float(values.get("sg_avg_valid"))
+    sg_valid_count = optional_int(values.get("sg_valid_count"))
+    sg_zero_count = optional_int(values.get("sg_zero_count"))
+    sg_low_count_50 = optional_int(values.get("sg_low_count_50"))
+    sg_low_count_100 = optional_int(values.get("sg_low_count_100"))
+    sg_low_count_150 = optional_int(values.get("sg_low_count_150"))
+    sg_low_ratio_50 = optional_float(values.get("sg_low_ratio_50"))
+    sg_low_ratio_100 = optional_float(values.get("sg_low_ratio_100"))
+    sg_low_ratio_150 = optional_float(values.get("sg_low_ratio_150"))
+    motion_update_count = optional_int(values.get("motion_update_count"))
+    max_update_gap_us = optional_int(values.get("max_update_gap_us"))
+    avg_update_gap_us = optional_float(values.get("avg_update_gap_us"))
+    move_start_limit_state = optional_text(values.get("move_start_limit_state"))
+    move_end_limit_state = optional_text(values.get("move_end_limit_state"))
+    home_end_limit_state = optional_text(values.get("home_end_limit_state"))
+    timeout_limit_state = optional_text(values.get("timeout_limit_state"))
+    limit_transition_count = optional_int(values.get("limit_transition_count"))
+    limit_first_trigger_timing = optional_text(values.get("limit_first_trigger_timing"))
+    timeout_current_position = optional_float(values.get("timeout_current_position"))
+    timeout_target_position = optional_float(values.get("timeout_target_position"))
+    timeout_remaining_steps = optional_int(values.get("timeout_remaining_steps"))
+    requested_current_ma = optional_int(values.get("requested_current_ma"))
+    applied_current_ma = optional_int(values.get("applied_current_ma"))
+    tmc_uart_ok = optional_text(values.get("tmc_uart_ok"))
+    config_tmc_uart_ok = optional_text(values.get("config_tmc_uart_ok"))
+    driver_status = optional_text(values.get("driver_status"))
+    validate_tmc_uart_ok = optional_text(values.get("validate_tmc_uart_ok"))
+    validate_driver_status = optional_text(values.get("validate_driver_status"))
+    validate_ifcnt_before = optional_int(values.get("validate_ifcnt_before"))
+    validate_ifcnt_after = optional_int(values.get("validate_ifcnt_after"))
+    validate_ifcnt_delta = optional_int(values.get("validate_ifcnt_delta"))
+    validate_gstat = optional_int(values.get("validate_gstat"))
+    validate_drv_status = optional_int(values.get("validate_drv_status"))
+    validate_requested_current_ma = optional_int(values.get("validate_requested_current_ma"))
+    validate_applied_current_ma = optional_int(values.get("validate_applied_current_ma"))
+    validate_current_error_ma = optional_int(values.get("validate_current_error_ma"))
+    validate_current_error_ratio = optional_float(values.get("validate_current_error_ratio"))
+    validate_current_tolerance_ma = optional_int(values.get("validate_current_tolerance_ma"))
+    validate_fail_reason_detail = optional_text(values.get("validate_fail_reason_detail"))
+    re_stage = optional_text(values.get("re_stage"))
+    re_reason = optional_text(values.get("re_reason"))
+    current_before_re = optional_int(values.get("current_before_re"))
+    position_before_re = optional_float(values.get("position_before_re"))
+    limit_state_before_re = optional_text(values.get("limit_state_before_re"))
+    motion_state_before_re = optional_text(values.get("motion_state_before_re"))
+    sgthrs = optional_int(values.get("sgthrs"))
+    tcoolthrs = optional_int(values.get("tcoolthrs"))
+    diag_triggered = optional_diag_text(values.get("diag_triggered"))
+
+    if sg_min is not None:
+        stats.sg_min = sg_min
+    if sg_max is not None:
+        stats.sg_max = sg_max
+    if sg_avg is not None:
+        stats.sg_avg = sg_avg
+    if sg_count is not None:
+        stats.sg_count = sg_count
+    if sg_min_valid is not None:
+        stats.sg_min_valid = sg_min_valid
+    if sg_max_valid is not None:
+        stats.sg_max_valid = sg_max_valid
+    if sg_avg_valid is not None:
+        stats.sg_avg_valid = sg_avg_valid
+    if sg_valid_count is not None:
+        stats.sg_valid_count = sg_valid_count
+    if sg_zero_count is not None:
+        stats.sg_zero_count = sg_zero_count
+    if sg_low_count_50 is not None:
+        stats.sg_low_count_50 = sg_low_count_50
+    if sg_low_count_100 is not None:
+        stats.sg_low_count_100 = sg_low_count_100
+    if sg_low_count_150 is not None:
+        stats.sg_low_count_150 = sg_low_count_150
+    if sg_low_ratio_50 is not None:
+        stats.sg_low_ratio_50 = sg_low_ratio_50
+    if sg_low_ratio_100 is not None:
+        stats.sg_low_ratio_100 = sg_low_ratio_100
+    if sg_low_ratio_150 is not None:
+        stats.sg_low_ratio_150 = sg_low_ratio_150
+    if motion_update_count is not None:
+        stats.motion_update_count = motion_update_count
+    if max_update_gap_us is not None:
+        stats.max_update_gap_us = max_update_gap_us
+    if avg_update_gap_us is not None:
+        stats.avg_update_gap_us = avg_update_gap_us
+    if move_start_limit_state is not None:
+        stats.move_start_limit_state = move_start_limit_state
+    if move_end_limit_state is not None:
+        stats.move_end_limit_state = move_end_limit_state
+    if home_end_limit_state is not None:
+        stats.home_end_limit_state = home_end_limit_state
+    if timeout_limit_state is not None:
+        stats.timeout_limit_state = timeout_limit_state
+    if limit_transition_count is not None:
+        stats.limit_transition_count = limit_transition_count
+    if limit_first_trigger_timing is not None:
+        stats.limit_first_trigger_timing = limit_first_trigger_timing
+    if timeout_current_position is not None:
+        stats.timeout_current_position = timeout_current_position
+    if timeout_target_position is not None:
+        stats.timeout_target_position = timeout_target_position
+    if timeout_remaining_steps is not None:
+        stats.timeout_remaining_steps = timeout_remaining_steps
+    if requested_current_ma is not None:
+        stats.requested_current_ma = requested_current_ma
+    if applied_current_ma is not None:
+        stats.applied_current_ma = applied_current_ma
+    if tmc_uart_ok is not None:
+        stats.tmc_uart_ok = tmc_uart_ok
+    if config_tmc_uart_ok is not None:
+        stats.config_tmc_uart_ok = config_tmc_uart_ok
+    if driver_status is not None:
+        stats.driver_status = driver_status
+    if validate_tmc_uart_ok is not None:
+        stats.validate_tmc_uart_ok = validate_tmc_uart_ok
+    if validate_driver_status is not None:
+        stats.validate_driver_status = validate_driver_status
+    if validate_ifcnt_before is not None:
+        stats.validate_ifcnt_before = validate_ifcnt_before
+    if validate_ifcnt_after is not None:
+        stats.validate_ifcnt_after = validate_ifcnt_after
+    if validate_ifcnt_delta is not None:
+        stats.validate_ifcnt_delta = validate_ifcnt_delta
+    if validate_gstat is not None:
+        stats.validate_gstat = validate_gstat
+    if validate_drv_status is not None:
+        stats.validate_drv_status = validate_drv_status
+    if validate_requested_current_ma is not None:
+        stats.validate_requested_current_ma = validate_requested_current_ma
+    if validate_applied_current_ma is not None:
+        stats.validate_applied_current_ma = validate_applied_current_ma
+    if validate_current_error_ma is not None:
+        stats.validate_current_error_ma = validate_current_error_ma
+    if validate_current_error_ratio is not None:
+        stats.validate_current_error_ratio = validate_current_error_ratio
+    if validate_current_tolerance_ma is not None:
+        stats.validate_current_tolerance_ma = validate_current_tolerance_ma
+    if validate_fail_reason_detail is not None:
+        stats.validate_fail_reason_detail = validate_fail_reason_detail
+    if re_stage is not None:
+        stats.re_stage = re_stage
+    if re_reason is not None:
+        stats.re_reason = re_reason
+    if current_before_re is not None:
+        stats.current_before_re = current_before_re
+    if position_before_re is not None:
+        stats.position_before_re = position_before_re
+    if limit_state_before_re is not None:
+        stats.limit_state_before_re = limit_state_before_re
+    if motion_state_before_re is not None:
+        stats.motion_state_before_re = motion_state_before_re
+    if sgthrs is not None:
+        stats.sgthrs = sgthrs
+    if tcoolthrs is not None:
+        stats.tcoolthrs = tcoolthrs
+    if diag_triggered is not None:
+        stats.diag_triggered = diag_triggered
+
+
+def optional_int(value: str | None) -> int | None:
+    text = optional_text(value)
+    if text is None:
+        return None
+    return int(text)
+
+
+def optional_float(value: str | None) -> float | None:
+    text = optional_text(value)
+    if text is None:
+        return None
+    return float(text)
+
+
+def optional_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = value.strip()
+    if not text or text.upper() == "NA":
+        return None
+    return text
+
+
+def optional_diag_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    return text.upper() if text.upper() == "NA" else text
+
+
+def aggregate_sg_stats(*items: SgStats) -> SgStats:
+    sample_counts = [item.sg_count for item in items if item.sg_count is not None]
+    total_count = sum(sample_counts) if sample_counts else None
+    valid_counts = [item.sg_valid_count for item in items if item.sg_valid_count is not None]
+    total_valid_count = sum(valid_counts) if valid_counts else None
+    zero_counts = [item.sg_zero_count for item in items if item.sg_zero_count is not None]
+    total_zero_count = sum(zero_counts) if zero_counts else None
+    low_counts_50 = [item.sg_low_count_50 for item in items if item.sg_low_count_50 is not None]
+    total_low_count_50 = sum(low_counts_50) if low_counts_50 else None
+    low_counts_100 = [item.sg_low_count_100 for item in items if item.sg_low_count_100 is not None]
+    total_low_count_100 = sum(low_counts_100) if low_counts_100 else None
+    low_counts_150 = [item.sg_low_count_150 for item in items if item.sg_low_count_150 is not None]
+    total_low_count_150 = sum(low_counts_150) if low_counts_150 else None
+    motion_counts = [item.motion_update_count for item in items if item.motion_update_count is not None]
+    total_motion_count = sum(motion_counts) if motion_counts else None
+    max_gaps = [item.max_update_gap_us for item in items if item.max_update_gap_us is not None]
+    avg_update_gap = weighted_motion_gap_avg(items)
+    weighted_avg = weighted_sg_avg(items)
+    diag_values = [item.diag_triggered for item in items if item.diag_triggered not in (None, "NA")]
+
+    if any(value == "1" for value in diag_values):
+        diag_triggered = "1"
+    elif any(value == "0" for value in diag_values):
+        diag_triggered = "0"
+    else:
+        diag_triggered = "NA" if any(item.diag_triggered == "NA" for item in items) else None
+
+    valid_mins = [item.sg_min_valid for item in items if item.sg_min_valid is not None]
+    valid_maxes = [item.sg_max_valid for item in items if item.sg_max_valid is not None]
+    return SgStats(
+        sg_min=min(valid_mins) if valid_mins else None,
+        sg_max=max(valid_maxes) if valid_maxes else None,
+        sg_avg=weighted_avg,
+        sg_count=total_count,
+        sg_min_valid=min(valid_mins) if valid_mins else None,
+        sg_max_valid=max(valid_maxes) if valid_maxes else None,
+        sg_avg_valid=weighted_avg,
+        sg_valid_count=total_valid_count,
+        sg_zero_count=total_zero_count,
+        sg_low_count_50=total_low_count_50,
+        sg_low_count_100=total_low_count_100,
+        sg_low_count_150=total_low_count_150,
+        sg_low_ratio_50=ratio_or_none(total_low_count_50, total_valid_count),
+        sg_low_ratio_100=ratio_or_none(total_low_count_100, total_valid_count),
+        sg_low_ratio_150=ratio_or_none(total_low_count_150, total_valid_count),
+        motion_update_count=total_motion_count,
+        max_update_gap_us=max(max_gaps) if max_gaps else None,
+        avg_update_gap_us=avg_update_gap,
+        move_start_limit_state=first_available_text([item.move_start_limit_state for item in items]),
+        move_end_limit_state=last_available_text([item.move_end_limit_state for item in items]),
+        home_end_limit_state=last_available_text([item.home_end_limit_state for item in items]),
+        timeout_limit_state=last_available_text([item.timeout_limit_state for item in items]),
+        limit_transition_count=sum(item.limit_transition_count for item in items if item.limit_transition_count is not None)
+        if any(item.limit_transition_count is not None for item in items)
+        else None,
+        limit_first_trigger_timing=first_non_none_trigger([item.limit_first_trigger_timing for item in items]),
+        timeout_current_position=last_available_float([item.timeout_current_position for item in items]),
+        timeout_target_position=last_available_float([item.timeout_target_position for item in items]),
+        timeout_remaining_steps=last_available_int([item.timeout_remaining_steps for item in items]),
+        requested_current_ma=last_available_int([item.requested_current_ma for item in items]),
+        applied_current_ma=last_available_int([item.applied_current_ma for item in items]),
+        tmc_uart_ok=last_available_text([item.tmc_uart_ok for item in items]),
+        config_tmc_uart_ok=last_available_text([item.config_tmc_uart_ok for item in items]),
+        driver_status=last_available_text([item.driver_status for item in items]),
+        validate_tmc_uart_ok=last_available_text([item.validate_tmc_uart_ok for item in items]),
+        validate_driver_status=last_available_text([item.validate_driver_status for item in items]),
+        validate_ifcnt_before=last_available_int([item.validate_ifcnt_before for item in items]),
+        validate_ifcnt_after=last_available_int([item.validate_ifcnt_after for item in items]),
+        validate_ifcnt_delta=last_available_int([item.validate_ifcnt_delta for item in items]),
+        validate_gstat=last_available_int([item.validate_gstat for item in items]),
+        validate_drv_status=last_available_int([item.validate_drv_status for item in items]),
+        validate_requested_current_ma=last_available_int([item.validate_requested_current_ma for item in items]),
+        validate_applied_current_ma=last_available_int([item.validate_applied_current_ma for item in items]),
+        validate_current_error_ma=last_available_int([item.validate_current_error_ma for item in items]),
+        validate_current_error_ratio=last_available_float([item.validate_current_error_ratio for item in items]),
+        validate_current_tolerance_ma=last_available_int([item.validate_current_tolerance_ma for item in items]),
+        validate_fail_reason_detail=last_available_text([item.validate_fail_reason_detail for item in items]),
+        re_stage=last_available_text([item.re_stage for item in items]),
+        re_reason=last_available_text([item.re_reason for item in items]),
+        current_before_re=last_available_int([item.current_before_re for item in items]),
+        position_before_re=last_available_float([item.position_before_re for item in items]),
+        limit_state_before_re=last_available_text([item.limit_state_before_re for item in items]),
+        motion_state_before_re=last_available_text([item.motion_state_before_re for item in items]),
+        diag_triggered=diag_triggered,
+        sgthrs=last_available_int([item.sgthrs for item in items]),
+        tcoolthrs=last_available_int([item.tcoolthrs for item in items]),
+    )
+
+
+def weighted_sg_avg(items: tuple[SgStats, ...]) -> float | None:
+    weighted_sum = 0.0
+    total_count = 0
+    fallback: float | None = None
+    for item in items:
+        avg = item.sg_avg_valid if item.sg_avg_valid is not None else item.sg_avg
+        if avg is None:
+            continue
+        fallback = avg
+        count = item.sg_valid_count if item.sg_valid_count is not None else item.sg_count
+        if count is not None and count > 0:
+            weighted_sum += avg * count
+            total_count += count
+    if total_count > 0:
+        return weighted_sum / total_count
+    return fallback
+
+
+def ratio_or_none(count: int | None, total: int | None) -> float | None:
+    if count is None or total is None or total <= 0:
+        return None
+    return count / total
+
+
+def weighted_motion_gap_avg(items: tuple[SgStats, ...]) -> float | None:
+    weighted_sum = 0.0
+    total_weight = 0
+    fallback: float | None = None
+    for item in items:
+        if item.avg_update_gap_us is None:
+            continue
+        fallback = item.avg_update_gap_us
+        if item.motion_update_count is not None and item.motion_update_count > 1:
+            weight = item.motion_update_count - 1
+            weighted_sum += item.avg_update_gap_us * weight
+            total_weight += weight
+    if total_weight > 0:
+        return weighted_sum / total_weight
+    return fallback
+
+
+def last_available_int(values: list[int | None]) -> int | None:
+    for value in reversed(values):
+        if value is not None:
+            return value
+    return None
+
+
+def last_available_float(values: list[float | None]) -> float | None:
+    for value in reversed(values):
+        if value is not None:
+            return value
+    return None
+
+
+def first_available_text(values: list[str | None]) -> str | None:
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
+def last_available_text(values: list[str | None]) -> str | None:
+    for value in reversed(values):
+        if value is not None:
+            return value
+    return None
+
+
+def first_non_none_trigger(values: list[str | None]) -> str | None:
+    for value in values:
+        if value not in (None, "NONE"):
+            return value
+    return "NONE" if any(value == "NONE" for value in values) else None
 
 
 def first_failure_code(test1: TestOutcome, test2: TestOutcome) -> str:
@@ -754,6 +1451,16 @@ def relative_link(base_dir: Path, target: Path) -> str:
 
 def result_csv_row(result: SweepResult) -> dict[str, str | int | float]:
     p = result.param
+    sg = result.sg
+    missing = "NA"
+    sg_stats_disabled = p.sg_enabled == 0
+    failure_detail, failure_stage, failure_evidence = classify_failure(result)
+    diagnostic = sg_diagnostic(result)
+    motion_detail = result_motion_error_detail(result)
+    timeout_stage = failure_stage if result.failure_reason == "TO" else None
+    current_error = current_error_ma(result)
+    current_ratio = current_error_ratio(result)
+    current_tolerance = current_tolerance_ma(result)
     return {
         "timestamp": result.timestamp,
         "speed_mm_s": fmt_num(p.speed_mm_s),
@@ -771,7 +1478,231 @@ def result_csv_row(result: SweepResult) -> dict[str, str | int | float]:
         "final_error_mm": "" if result.final_error_mm is None else f"{result.final_error_mm:.4f}",
         "final_remaining_steps": "" if result.final_remaining_steps is None else result.final_remaining_steps,
         "elapsed_sec": f"{result.elapsed_sec:.3f}",
+        "sg_min": missing if sg_stats_disabled or sg.sg_min is None else sg.sg_min,
+        "sg_max": missing if sg_stats_disabled or sg.sg_max is None else sg.sg_max,
+        "sg_avg": missing if sg_stats_disabled or sg.sg_avg is None else f"{sg.sg_avg:.1f}",
+        "sg_count": missing if sg_stats_disabled or sg.sg_count is None else sg.sg_count,
+        "sg_min_valid": missing if sg_stats_disabled or sg.sg_min_valid is None else sg.sg_min_valid,
+        "sg_max_valid": missing if sg_stats_disabled or sg.sg_max_valid is None else sg.sg_max_valid,
+        "sg_avg_valid": missing if sg_stats_disabled or sg.sg_avg_valid is None else f"{sg.sg_avg_valid:.1f}",
+        "sg_valid_count": missing if sg_stats_disabled or sg.sg_valid_count is None else sg.sg_valid_count,
+        "sg_zero_count": missing if sg_stats_disabled or sg.sg_zero_count is None else sg.sg_zero_count,
+        "sg_low_count_50": missing if sg_stats_disabled or sg.sg_low_count_50 is None else sg.sg_low_count_50,
+        "sg_low_count_100": missing if sg_stats_disabled or sg.sg_low_count_100 is None else sg.sg_low_count_100,
+        "sg_low_count_150": missing if sg_stats_disabled or sg.sg_low_count_150 is None else sg.sg_low_count_150,
+        "sg_low_ratio_50": missing if sg_stats_disabled or sg.sg_low_ratio_50 is None else f"{sg.sg_low_ratio_50:.4f}",
+        "sg_low_ratio_100": missing if sg_stats_disabled or sg.sg_low_ratio_100 is None else f"{sg.sg_low_ratio_100:.4f}",
+        "sg_low_ratio_150": missing if sg_stats_disabled or sg.sg_low_ratio_150 is None else f"{sg.sg_low_ratio_150:.4f}",
+        "motion_update_count": missing if sg.motion_update_count is None else sg.motion_update_count,
+        "max_update_gap_us": missing if sg.max_update_gap_us is None else sg.max_update_gap_us,
+        "avg_update_gap_us": missing if sg.avg_update_gap_us is None else f"{sg.avg_update_gap_us:.1f}",
+        "diag_triggered": missing if sg.diag_triggered is None else sg.diag_triggered,
+        "sgthrs": missing if sg.sgthrs is None else sg.sgthrs,
+        "tcoolthrs": missing if sg.tcoolthrs is None else sg.tcoolthrs,
+        "test_condition_id": p.test_condition_id,
+        "repeat_index": missing if p.repeat_index is None else p.repeat_index,
+        "sg_enabled": missing if p.sg_enabled is None else p.sg_enabled,
+        "sg_interval_ms": missing if p.sg_interval_ms is None else p.sg_interval_ms,
+        "sglog_enabled": missing if p.sglog_enabled is None else p.sglog_enabled,
+        "move_start_limit_state": missing if sg.move_start_limit_state is None else sg.move_start_limit_state,
+        "move_end_limit_state": missing if sg.move_end_limit_state is None else sg.move_end_limit_state,
+        "home_end_limit_state": missing if sg.home_end_limit_state is None else sg.home_end_limit_state,
+        "timeout_limit_state": missing if sg.timeout_limit_state is None else sg.timeout_limit_state,
+        "limit_transition_count": missing if sg.limit_transition_count is None else sg.limit_transition_count,
+        "limit_first_trigger_timing": missing if sg.limit_first_trigger_timing is None else sg.limit_first_trigger_timing,
+        "timeout_current_position": missing if sg.timeout_current_position is None else f"{sg.timeout_current_position:.4f}",
+        "timeout_target_position": missing if sg.timeout_target_position is None else f"{sg.timeout_target_position:.4f}",
+        "timeout_remaining_steps": missing if sg.timeout_remaining_steps is None else sg.timeout_remaining_steps,
+        "requested_current_ma": missing if sg.requested_current_ma is None else sg.requested_current_ma,
+        "applied_current_ma": missing if sg.applied_current_ma is None else sg.applied_current_ma,
+        "tmc_uart_ok": missing if sg.tmc_uart_ok is None else sg.tmc_uart_ok,
+        "config_tmc_uart_ok": missing if sg.config_tmc_uart_ok is None else sg.config_tmc_uart_ok,
+        "driver_status": missing if sg.driver_status is None else sg.driver_status,
+        "validate_tmc_uart_ok": missing if sg.validate_tmc_uart_ok is None else sg.validate_tmc_uart_ok,
+        "validate_driver_status": missing if sg.validate_driver_status is None else sg.validate_driver_status,
+        "validate_ifcnt_before": missing if sg.validate_ifcnt_before is None else sg.validate_ifcnt_before,
+        "validate_ifcnt_after": missing if sg.validate_ifcnt_after is None else sg.validate_ifcnt_after,
+        "validate_ifcnt_delta": missing if sg.validate_ifcnt_delta is None else sg.validate_ifcnt_delta,
+        "validate_gstat": missing if sg.validate_gstat is None else sg.validate_gstat,
+        "validate_drv_status": missing if sg.validate_drv_status is None else sg.validate_drv_status,
+        "validate_requested_current_ma": missing if sg.validate_requested_current_ma is None else sg.validate_requested_current_ma,
+        "validate_applied_current_ma": missing if sg.validate_applied_current_ma is None else sg.validate_applied_current_ma,
+        "validate_current_error_ma": missing if sg.validate_current_error_ma is None else sg.validate_current_error_ma,
+        "validate_current_error_ratio": missing if sg.validate_current_error_ratio is None else f"{sg.validate_current_error_ratio:.4f}",
+        "validate_current_tolerance_ma": missing if sg.validate_current_tolerance_ma is None else sg.validate_current_tolerance_ma,
+        "validate_fail_reason_detail": missing if sg.validate_fail_reason_detail is None else sg.validate_fail_reason_detail,
+        "re_stage": missing if sg.re_stage is None else sg.re_stage,
+        "re_reason": missing if sg.re_reason is None else sg.re_reason,
+        "current_before_re": missing if sg.current_before_re is None else sg.current_before_re,
+        "position_before_re": missing if sg.position_before_re is None else f"{sg.position_before_re:.4f}",
+        "limit_state_before_re": missing if sg.limit_state_before_re is None else sg.limit_state_before_re,
+        "motion_state_before_re": missing if sg.motion_state_before_re is None else sg.motion_state_before_re,
+        "failure_detail": failure_detail,
+        "failure_stage": failure_stage,
+        "failure_evidence": failure_evidence,
+        "timeout_stage": missing if timeout_stage is None else timeout_stage,
+        "timeout_elapsed_ms": missing if result.failure_reason != "TO" else f"{result.elapsed_sec * 1000.0:.0f}",
+        "timeout_motion_state": missing if result.failure_reason != "TO" else (sg.motion_state_before_re or "NA"),
+        "timeout_last_step_time_ms": missing,
+        "timeout_expected_duration_ms": timeout_expected_duration_ms_text(result),
+        "expected_position": missing if motion_detail is None else f"{motion_detail['target']:.4f}",
+        "actual_position": missing if motion_detail is None else f"{motion_detail['pos']:.4f}",
+        "abs_error_mm": missing if result.final_error_mm is None else f"{abs(result.final_error_mm):.4f}",
+        "error_threshold_mm": "0.5000",
+        "remaining_steps_threshold": "0",
+        "limit_expected_state": limit_expected_state(result),
+        "limit_actual_state": result.final_limit_state,
+        "limit_failure_detail": limit_failure_detail(result),
+        "current_error_ma": missing if current_error is None else current_error,
+        "current_error_ratio": missing if current_ratio is None else f"{current_ratio:.4f}",
+        "current_tolerance_ma": missing if current_tolerance is None else current_tolerance,
+        "sg_health_state": diagnostic["health"],
+        "diagnostic_tags": diagnostic["tags"],
+        "diagnostic_comment": diagnostic["comment"],
     }
+
+
+def classify_failure(result: SweepResult) -> tuple[str, str, str]:
+    if result.final_result == "PASS":
+        return "OK", "complete", "existing_logic_pass"
+
+    failed = first_failed_test(result.test1, result.test2)
+    stage = failed.name
+    evidence_parts = [
+        f"reason={result.failure_reason}",
+        f"limit={result.final_limit_state}",
+        f"timing={result.final_limit_timing}",
+    ]
+    if result.final_error_mm is not None:
+        evidence_parts.append(f"error_mm={result.final_error_mm:.4f}")
+    if result.final_remaining_steps is not None:
+        evidence_parts.append(f"remaining_steps={result.final_remaining_steps}")
+
+    if result.failure_reason == "TO":
+        detail = timeout_failure_detail(result)
+    elif result.failure_reason == "ME":
+        detail = "ME_POSITION_ERROR"
+    elif result.failure_reason == "LOFF":
+        detail = "LIMIT_NOT_REACHED"
+    elif result.failure_reason == "LPOS":
+        detail = "ME_POSITION_ERROR"
+    elif result.failure_reason == "RE":
+        detail = re_failure_detail(result)
+    elif result.failure_reason == "HE":
+        detail = "TO_HOME"
+        stage = "home"
+    else:
+        detail = "UNKNOWN"
+    return detail, stage, ";".join(evidence_parts)
+
+
+def timeout_failure_detail(result: SweepResult) -> str:
+    sg = result.sg
+    if sg.timeout_remaining_steps == 0:
+        return "TO_COMPLETION_DETECTION_MISMATCH"
+    if sg.timeout_current_position is not None and sg.timeout_target_position is not None:
+        if abs(sg.timeout_current_position - sg.timeout_target_position) <= 0.5:
+            return "TO_COMPLETION_DETECTION_MISMATCH"
+    failed = first_failed_test(result.test1, result.test2)
+    if failed.name == "test1":
+        return "TO_FORWARD"
+    if failed.name == "test2":
+        return "TO_RETURN"
+    return "TO_FORWARD"
+
+
+def re_failure_detail(result: SweepResult) -> str:
+    sg = result.sg
+    reason = (sg.re_reason or "").lower()
+    stage = (sg.re_stage or "").lower()
+    if "uart" in reason or "test_connection" in reason or "uart" in (sg.validate_fail_reason_detail or "").lower():
+        return "RE_UART_VALIDATE"
+    if "current" in stage or "current" in reason:
+        return "RE_CURRENT_APPLY"
+    if "state" in reason:
+        return "RE_STATE_INVALID"
+    if "driver" in reason or "drv" in reason:
+        return "RE_DRIVER_STATUS"
+    return "RE_SERIAL_SYNC"
+
+
+def limit_expected_state(result: SweepResult) -> str:
+    if result.failure_reason in ("LOFF", "LPOS") or result.final_result == "PASS":
+        return "ON"
+    return "NA"
+
+
+def limit_failure_detail(result: SweepResult) -> str:
+    sg = result.sg
+    if sg.limit_transition_count is not None and sg.limit_transition_count > 3:
+        return "LIMIT_BOUNCE"
+    if result.failure_reason == "LOFF":
+        return "LIMIT_NOT_REACHED"
+    if result.final_limit_timing == "EARLY_LIMIT":
+        return "LIMIT_EARLY"
+    return "NA"
+
+
+def current_error_ma(result: SweepResult) -> int | None:
+    if result.sg.validate_current_error_ma is not None:
+        return result.sg.validate_current_error_ma
+    if result.sg.applied_current_ma is None or result.sg.requested_current_ma is None:
+        return None
+    return result.sg.applied_current_ma - result.sg.requested_current_ma
+
+
+def current_error_ratio(result: SweepResult) -> float | None:
+    if result.sg.validate_current_error_ratio is not None:
+        return result.sg.validate_current_error_ratio
+    error = current_error_ma(result)
+    requested = result.sg.requested_current_ma
+    if error is None or requested is None or requested == 0:
+        return None
+    return error / requested
+
+
+def current_tolerance_ma(result: SweepResult) -> int | None:
+    if result.sg.validate_current_tolerance_ma is not None:
+        return result.sg.validate_current_tolerance_ma
+    requested = result.sg.requested_current_ma
+    if requested is None:
+        return None
+    return max(50, int(requested * 0.10))
+
+
+def result_motion_error_detail(result: SweepResult) -> dict[str, float] | None:
+    failed = first_failed_test(result.test1, result.test2)
+    return last_motion_error_detail(failed.log_excerpt)
+
+
+def timeout_expected_duration_ms_text(result: SweepResult) -> str:
+    p = result.param
+    distance = 50.0 if first_failed_test(result.test1, result.test2).name == "test2" else 10.0
+    if p.speed_mm_s <= 0:
+        return "NA"
+    return f"{distance / p.speed_mm_s * 1000.0:.0f}"
+
+
+def sg_diagnostic(result: SweepResult) -> dict[str, str]:
+    sg = result.sg
+    tags: list[str] = []
+    if sg.sg_valid_count is None or sg.sg_valid_count < 10:
+        tags.append("SG_INSUFFICIENT_SAMPLES")
+    if sg.sg_zero_count is not None and sg.sg_count is not None and sg.sg_count > 0 and sg.sg_zero_count / sg.sg_count > 0.05:
+        tags.append("SG_ZERO_SAMPLES")
+    if sg.sg_avg_valid is not None and sg.sg_avg_valid < 120.0:
+        tags.append("SG_LOW_AVG")
+    if sg.sg_low_ratio_150 is not None and sg.sg_low_ratio_150 > 0.5:
+        tags.append("SG_LOW")
+
+    if not tags:
+        health = "SG_NORMAL"
+    elif "SG_INSUFFICIENT_SAMPLES" in tags and len(tags) == 1:
+        health = "SG_UNKNOWN"
+    else:
+        health = "SG_WARN"
+    comment = "SG is diagnostic only; it does not affect PASS/FAIL"
+    return {"health": health, "tags": ";".join(tags) if tags else "NONE", "comment": comment}
 
 
 def write_markdown_report(
@@ -814,6 +1745,29 @@ def write_markdown_report(
     lines.append("## Condition Summary")
     lines.append("")
     lines.extend(condition_summary_table(results))
+
+    lines.append("")
+    lines.append("## Failure Diagnostics")
+    lines.append("")
+    lines.extend(failure_diagnostics_report(results))
+
+    if has_sg_overhead_metadata(results):
+        lines.append("")
+        lines.append("## SG Overhead Validation")
+        lines.append("")
+        lines.extend(sg_overhead_validation_table(results))
+
+    if any(item.param.test_condition_id == "B_REPRO" for item in results):
+        lines.append("")
+        lines.append("## B_REPRO Results")
+        lines.append("")
+        lines.extend(b_repro_report_section(results))
+
+    if any(item.param.test_condition_id.startswith("CUR_") for item in results):
+        lines.append("")
+        lines.append("## Current Sweep Analysis")
+        lines.append("")
+        lines.extend(current_sweep_report_section(results))
 
     lines.append("")
     lines.append("## OK/NG Graph")
@@ -934,6 +1888,481 @@ def condition_summary_table(results: list[SweepResult]) -> list[str]:
         ["current_ma", "chop_mode", "microsteps", "pass_count", "fail_count", "pass_rate", "max_pass_speed_mm_s"],
         rows,
     )
+
+
+def failure_diagnostics_report(results: list[SweepResult]) -> list[str]:
+    lines: list[str] = []
+    lines.append("### Result Counts")
+    lines.append("")
+    lines.extend(count_table(results, lambda item: "OK" if item.final_result == "PASS" else "NG", "result"))
+
+    lines.append("")
+    lines.append("### Failure Reason Counts")
+    lines.append("")
+    lines.extend(count_table(results, lambda item: item.failure_reason, "failure_reason"))
+
+    lines.append("")
+    lines.append("### Failure Detail Counts")
+    lines.append("")
+    lines.extend(count_table(results, lambda item: classify_failure(item)[0], "failure_detail"))
+
+    lines.append("")
+    lines.append("### TO Rows")
+    lines.append("")
+    lines.extend(markdown_table(
+        ["condition", "stage", "detail", "timeout_pos", "target", "remaining", "elapsed_ms", "motion_state", "limit"],
+        [
+            [
+                item.param.test_condition_id,
+                classify_failure(item)[1],
+                classify_failure(item)[0],
+                "NA" if item.sg.timeout_current_position is None else f"{item.sg.timeout_current_position:.4f}",
+                "NA" if item.sg.timeout_target_position is None else f"{item.sg.timeout_target_position:.4f}",
+                value_or_na(item.sg.timeout_remaining_steps),
+                f"{item.elapsed_sec * 1000.0:.0f}",
+                value_or_na(item.sg.motion_state_before_re),
+                value_or_na(item.sg.timeout_limit_state),
+            ]
+            for item in results
+            if item.failure_reason == "TO"
+        ],
+    ))
+
+    lines.append("")
+    lines.append("### ME Rows")
+    lines.append("")
+    lines.extend(markdown_table(
+        ["condition", "detail", "expected", "actual", "error_mm", "remaining_steps", "threshold_mm"],
+        [
+            [
+                item.param.test_condition_id,
+                classify_failure(item)[0],
+                motion_value_text(result_motion_error_detail(item), "target"),
+                motion_value_text(result_motion_error_detail(item), "pos"),
+                "NA" if item.final_error_mm is None else f"{item.final_error_mm:.4f}",
+                value_or_na(item.final_remaining_steps),
+                "0.5000",
+            ]
+            for item in results
+            if item.failure_reason in ("ME", "LPOS")
+        ],
+    ))
+
+    lines.append("")
+    lines.append("### Limit Rows")
+    lines.append("")
+    lines.extend(markdown_table(
+        ["condition", "detail", "start", "end", "home_end", "transitions", "first_trigger", "expected", "actual"],
+        [
+            [
+                item.param.test_condition_id,
+                limit_failure_detail(item),
+                value_or_na(item.sg.move_start_limit_state),
+                value_or_na(item.sg.move_end_limit_state),
+                value_or_na(item.sg.home_end_limit_state),
+                value_or_na(item.sg.limit_transition_count),
+                value_or_na(item.sg.limit_first_trigger_timing),
+                limit_expected_state(item),
+                item.final_limit_state,
+            ]
+            for item in results
+            if limit_failure_detail(item) != "NA"
+        ],
+    ))
+
+    lines.append("")
+    lines.append("### RE Rows")
+    lines.append("")
+    lines.extend(markdown_table(
+        ["condition", "detail", "stage", "reason", "requested", "applied", "config_uart", "validate_uart", "driver", "validate_detail"],
+        [
+            [
+                item.param.test_condition_id,
+                classify_failure(item)[0],
+                value_or_na(item.sg.re_stage),
+                value_or_na(item.sg.re_reason),
+                value_or_na(item.sg.requested_current_ma),
+                value_or_na(item.sg.applied_current_ma),
+                value_or_na(item.sg.config_tmc_uart_ok),
+                value_or_na(item.sg.validate_tmc_uart_ok),
+                value_or_na(item.sg.driver_status),
+                value_or_na(item.sg.validate_fail_reason_detail),
+            ]
+            for item in results
+            if item.failure_reason == "RE"
+        ],
+    ))
+
+    lines.append("")
+    lines.append("### Diagnostic Tags")
+    lines.append("")
+    lines.extend(count_table(results, lambda item: sg_diagnostic(item)["tags"], "diagnostic_tags"))
+
+    lines.append("")
+    lines.append("### SG Diagnostic Cross Check")
+    lines.append("")
+    rows: list[list[str]] = []
+    for item in results:
+        diagnostic = sg_diagnostic(item)
+        if ("SG_LOW" in diagnostic["tags"] or "SG_LOW_AVG" in diagnostic["tags"]) and item.final_result == "PASS":
+            rows.append([item.param.test_condition_id, "SG_LOW_OK", diagnostic["tags"], item.failure_reason])
+        if diagnostic["health"] == "SG_NORMAL" and item.final_result != "PASS":
+            rows.append([item.param.test_condition_id, "SG_NORMAL_NG", diagnostic["tags"], item.failure_reason])
+    lines.extend(markdown_table(["condition", "case", "diagnostic_tags", "failure_reason"], rows))
+    lines.append("")
+    lines.append("SG diagnostics are not used to determine PASS/FAIL.")
+    return lines
+
+
+def count_table(results: list[SweepResult], key_fn, key_name: str) -> list[str]:
+    counts: dict[str, int] = defaultdict(int)
+    for item in results:
+        counts[key_fn(item)] += 1
+    return markdown_table([key_name, "count"], [[key, str(counts[key])] for key in sorted(counts)])
+
+
+def motion_value_text(detail: dict[str, float] | None, key: str) -> str:
+    if detail is None or key not in detail:
+        return "NA"
+    return f"{detail[key]:.4f}"
+
+
+def has_sg_overhead_metadata(results: list[SweepResult]) -> bool:
+    for result in results:
+        p = result.param
+        if p.test_condition_id != "NA":
+            return True
+        if p.repeat_index is not None or p.sg_enabled is not None or p.sg_interval_ms is not None or p.sglog_enabled is not None:
+            return True
+    return False
+
+
+def sg_overhead_validation_table(results: list[SweepResult]) -> list[str]:
+    groups: dict[str, list[SweepResult]] = defaultdict(list)
+    for result in results:
+        groups[result.param.test_condition_id].append(result)
+
+    rows: list[list[str]] = []
+    for condition_id in sorted(groups):
+        group = groups[condition_id]
+        pass_count = sum(1 for item in group if item.final_result == "PASS")
+        fail_count = len(group) - pass_count
+        to_count = sum(1 for item in group if item.failure_reason == "TO")
+        me_count = sum(1 for item in group if item.failure_reason == "ME")
+        sample = group[0].param
+        rows.append([
+            condition_id,
+            fmt_num(sample.speed_mm_s),
+            fmt_num(sample.accel_mm_s2),
+            str(sample.current_ma),
+            sample.chop_mode,
+            str(sample.microsteps),
+            value_or_na(sample.sg_enabled),
+            value_or_na(sample.sg_interval_ms),
+            value_or_na(sample.sglog_enabled),
+            str(len(group)),
+            str(pass_count),
+            str(fail_count),
+            str(to_count),
+            str(me_count),
+            avg_float_text([item.final_error_mm for item in group], digits=4),
+            max_float_text([item.final_error_mm for item in group], digits=4),
+            avg_float_text([item.sg.max_update_gap_us for item in group], digits=1),
+            max_int_text([item.sg.max_update_gap_us for item in group]),
+            avg_float_text([item.sg.sg_avg_valid for item in group if item.param.sg_enabled != 0], digits=1),
+            avg_float_text([item.sg.sg_low_ratio_150 for item in group if item.param.sg_enabled != 0], digits=4),
+        ])
+
+    return markdown_table(
+        [
+            "test_condition_id",
+            "speed",
+            "accel",
+            "current",
+            "chop",
+            "microsteps",
+            "sg_enabled",
+            "sg_interval_ms",
+            "sglog_enabled",
+            "total",
+            "OK",
+            "NG",
+            "TO",
+            "ME",
+            "avg_error_mm",
+            "max_error_mm",
+            "avg_max_gap_us",
+            "max_gap_us",
+            "avg_sg_avg_valid",
+            "avg_sg_low_ratio_150",
+        ],
+        rows,
+    )
+
+
+def b_repro_report_section(results: list[SweepResult]) -> list[str]:
+    group = [item for item in results if item.param.test_condition_id == "B_REPRO"]
+    if not group:
+        return ["No B_REPRO rows."]
+    ok_count = sum(1 for item in group if item.final_result == "PASS")
+    to_count = sum(1 for item in group if item.failure_reason == "TO")
+    loff_count = sum(1 for item in group if item.failure_reason == "LOFF")
+    me_count = sum(1 for item in group if item.failure_reason == "ME")
+
+    lines: list[str] = []
+    lines.extend(markdown_table(
+        ["Metric", "Value"],
+        [
+            ["total", str(len(group))],
+            ["OK", str(ok_count)],
+            ["TO", str(to_count)],
+            ["LOFF", str(loff_count)],
+            ["ME", str(me_count)],
+        ],
+    ))
+    lines.append("")
+    lines.extend(markdown_table(
+        [
+            "repeat",
+            "result",
+            "reason",
+            "error_mm",
+            "elapsed_sec",
+            "limit",
+            "timing",
+            "move_start_limit",
+            "move_end_limit",
+            "timeout_limit",
+            "limit_transitions",
+            "motion_updates",
+            "max_gap_us",
+            "avg_gap_us",
+            "timeout_pos",
+            "timeout_target",
+            "timeout_remaining",
+            "sg_avg_valid",
+            "sg_low_ratio_150",
+        ],
+        [
+            [
+                value_or_na(item.param.repeat_index),
+                "OK" if item.final_result == "PASS" else "NG",
+                item.failure_reason,
+                "NA" if item.final_error_mm is None else f"{item.final_error_mm:.4f}",
+                f"{item.elapsed_sec:.3f}",
+                item.final_limit_state,
+                item.final_limit_timing,
+                value_or_na(item.sg.move_start_limit_state),
+                value_or_na(item.sg.move_end_limit_state),
+                value_or_na(item.sg.timeout_limit_state),
+                value_or_na(item.sg.limit_transition_count),
+                value_or_na(item.sg.motion_update_count),
+                value_or_na(item.sg.max_update_gap_us),
+                "NA" if item.sg.avg_update_gap_us is None else f"{item.sg.avg_update_gap_us:.1f}",
+                "NA" if item.sg.timeout_current_position is None else f"{item.sg.timeout_current_position:.4f}",
+                "NA" if item.sg.timeout_target_position is None else f"{item.sg.timeout_target_position:.4f}",
+                value_or_na(item.sg.timeout_remaining_steps),
+                "NA" if item.sg.sg_avg_valid is None else f"{item.sg.sg_avg_valid:.1f}",
+                "NA" if item.sg.sg_low_ratio_150 is None else f"{item.sg.sg_low_ratio_150:.4f}",
+            ]
+            for item in sorted(group, key=lambda result: result.param.repeat_index or 0)
+        ],
+    ))
+    lines.append("")
+    lines.append("Decision notes: mixed OK/TO/LOFF results point to the test sequence, limit detection, completion detection, or motion update cadence in addition to true step loss. Large `max_update_gap_us` or `timeout_remaining_steps` on TO rows suggests update jitter or an unfinished move. Good SG values with TO/LOFF should push the next investigation toward control logic and limit input behavior before StallGuard thresholds.")
+    return lines
+
+
+def current_sweep_report_section(results: list[SweepResult]) -> list[str]:
+    group = [item for item in results if item.param.test_condition_id.startswith("CUR_")]
+    if not group:
+        return ["No current sweep rows."]
+
+    lines: list[str] = []
+    lines.append("### OK/NG By Current")
+    lines.append("")
+    lines.extend(ok_ng_by_key_table(group, lambda item: str(item.param.current_ma), "current_ma"))
+
+    lines.append("")
+    lines.append("### OK/NG By Speed")
+    lines.append("")
+    lines.extend(ok_ng_by_key_table(group, lambda item: fmt_num(item.param.speed_mm_s), "speed_mm_s"))
+
+    lines.append("")
+    lines.append("### OK/NG By Accel")
+    lines.append("")
+    lines.extend(ok_ng_by_key_table(group, lambda item: fmt_num(item.param.accel_mm_s2), "accel_mm_s2"))
+
+    lines.append("")
+    lines.append("### Error And SG Detail")
+    lines.append("")
+    lines.extend(markdown_table(
+        [
+            "condition",
+            "result",
+            "reason",
+            "final_error_mm",
+            "sg_avg_valid",
+            "sg_low_ratio_150",
+            "max_update_gap_us",
+        ],
+        [
+            [
+                item.param.test_condition_id,
+                "OK" if item.final_result == "PASS" else "NG",
+                item.failure_reason,
+                "NA" if item.final_error_mm is None else f"{item.final_error_mm:.4f}",
+                "NA" if item.sg.sg_avg_valid is None else f"{item.sg.sg_avg_valid:.1f}",
+                "NA" if item.sg.sg_low_ratio_150 is None else f"{item.sg.sg_low_ratio_150:.4f}",
+                value_or_na(item.sg.max_update_gap_us),
+            ]
+            for item in sorted(group, key=current_sweep_sort_key)
+        ],
+    ))
+
+    lines.append("")
+    lines.append("### Failure Details")
+    lines.append("")
+    failures = [item for item in group if item.failure_reason in ("TO", "ME", "LOFF")]
+    lines.extend(markdown_table(
+        [
+            "condition",
+            "reason",
+            "limit",
+            "timing",
+            "move_start_limit",
+            "move_end_limit",
+            "timeout_limit",
+            "timeout_remaining",
+            "max_update_gap_us",
+            "sg_avg_valid",
+            "sg_low_ratio_150",
+        ],
+        [
+            [
+                item.param.test_condition_id,
+                item.failure_reason,
+                item.final_limit_state,
+                item.final_limit_timing,
+                value_or_na(item.sg.move_start_limit_state),
+                value_or_na(item.sg.move_end_limit_state),
+                value_or_na(item.sg.timeout_limit_state),
+                value_or_na(item.sg.timeout_remaining_steps),
+                value_or_na(item.sg.max_update_gap_us),
+                "NA" if item.sg.sg_avg_valid is None else f"{item.sg.sg_avg_valid:.1f}",
+                "NA" if item.sg.sg_low_ratio_150 is None else f"{item.sg.sg_low_ratio_150:.4f}",
+            ]
+            for item in sorted(failures, key=current_sweep_sort_key)
+        ],
+    ))
+
+    safe = [item for item in group if item.final_result == "PASS"]
+    lines.append("")
+    lines.append("### Recommended Safe Conditions")
+    lines.append("")
+    lines.extend(markdown_table(
+        ["condition", "current", "speed", "accel", "error_mm", "sg_avg_valid", "sg_low_ratio_150", "max_update_gap_us"],
+        [
+            [
+                item.param.test_condition_id,
+                str(item.param.current_ma),
+                fmt_num(item.param.speed_mm_s),
+                fmt_num(item.param.accel_mm_s2),
+                "NA" if item.final_error_mm is None else f"{item.final_error_mm:.4f}",
+                "NA" if item.sg.sg_avg_valid is None else f"{item.sg.sg_avg_valid:.1f}",
+                "NA" if item.sg.sg_low_ratio_150 is None else f"{item.sg.sg_low_ratio_150:.4f}",
+                value_or_na(item.sg.max_update_gap_us),
+            ]
+            for item in sorted(safe, key=current_sweep_sort_key)
+        ],
+    ))
+
+    boundary = current_sweep_boundary_candidates(group)
+    lines.append("")
+    lines.append("### Boundary Candidates")
+    lines.append("")
+    lines.extend(markdown_table(
+        ["condition", "current", "speed", "accel", "result", "reason", "neighbor_note"],
+        boundary,
+    ))
+    return lines
+
+
+def ok_ng_by_key_table(results: list[SweepResult], key_fn, key_name: str) -> list[str]:
+    grouped: dict[str, list[SweepResult]] = defaultdict(list)
+    for item in results:
+        grouped[key_fn(item)].append(item)
+    rows: list[list[str]] = []
+    for key in sorted(grouped, key=numeric_sort_key):
+        items = grouped[key]
+        ok_count = sum(1 for item in items if item.final_result == "PASS")
+        ng_count = len(items) - ok_count
+        rows.append([key, str(ok_count), str(ng_count), f"{ok_count / len(items) * 100.0:.1f}%"])
+    return markdown_table([key_name, "OK", "NG", "OK_rate"], rows)
+
+
+def current_sweep_sort_key(item: SweepResult) -> tuple[int, float, float]:
+    return (item.param.current_ma, item.param.speed_mm_s, item.param.accel_mm_s2)
+
+
+def current_sweep_boundary_candidates(results: list[SweepResult]) -> list[list[str]]:
+    by_point = {
+        (item.param.current_ma, item.param.speed_mm_s, item.param.accel_mm_s2): item
+        for item in results
+    }
+    rows: list[list[str]] = []
+    for item in sorted(results, key=current_sweep_sort_key):
+        p = item.param
+        neighbors = [
+            by_point.get((p.current_ma, p.speed_mm_s - 20, p.accel_mm_s2)),
+            by_point.get((p.current_ma, p.speed_mm_s + 20, p.accel_mm_s2)),
+            by_point.get((p.current_ma, p.speed_mm_s, 100.0 if p.accel_mm_s2 == 300.0 else 300.0)),
+        ]
+        has_mixed_neighbor = any(neighbor is not None and neighbor.final_result != item.final_result for neighbor in neighbors)
+        if item.final_result != "PASS" or has_mixed_neighbor:
+            note = "near mixed OK/NG boundary" if has_mixed_neighbor else "failed condition"
+            rows.append([
+                p.test_condition_id,
+                str(p.current_ma),
+                fmt_num(p.speed_mm_s),
+                fmt_num(p.accel_mm_s2),
+                "OK" if item.final_result == "PASS" else "NG",
+                item.failure_reason,
+                note,
+            ])
+    return rows
+
+
+def numeric_sort_key(value: str) -> tuple[int, float | str]:
+    try:
+        return (0, float(value))
+    except ValueError:
+        return (1, value)
+
+
+def value_or_na(value: object | None) -> str:
+    return "NA" if value is None else str(value)
+
+
+def avg_float_text(values: Iterable[float | int | None], digits: int) -> str:
+    numeric = [float(value) for value in values if value is not None]
+    if not numeric:
+        return "NA"
+    return f"{sum(numeric) / len(numeric):.{digits}f}"
+
+
+def max_float_text(values: Iterable[float | int | None], digits: int) -> str:
+    numeric = [float(value) for value in values if value is not None]
+    if not numeric:
+        return "NA"
+    return f"{max(numeric):.{digits}f}"
+
+
+def max_int_text(values: Iterable[int | None]) -> str:
+    numeric = [value for value in values if value is not None]
+    if not numeric:
+        return "NA"
+    return str(max(numeric))
 
 
 def detail_results_table(results: list[SweepResult]) -> list[str]:

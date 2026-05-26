@@ -1,0 +1,16 @@
+speed_mm_s,accel_mm_s2,current_ma,chop_mode,microsteps,test_condition_id,repeat_index,sg_enabled,sg_interval_ms,sglog_enabled,validate_only
+80,100,700,stealth,16,VALONLY_700,1,1,20,0,1
+80,100,700,stealth,16,VALONLY_700,2,1,20,0,1
+80,100,700,stealth,16,VALONLY_700,3,1,20,0,1
+80,100,700,stealth,16,VALONLY_700,4,1,20,0,1
+80,100,700,stealth,16,VALONLY_700,5,1,20,0,1
+80,100,800,stealth,16,VALONLY_800,1,1,20,0,1
+80,100,800,stealth,16,VALONLY_800,2,1,20,0,1
+80,100,800,stealth,16,VALONLY_800,3,1,20,0,1
+80,100,800,stealth,16,VALONLY_800,4,1,20,0,1
+80,100,800,stealth,16,VALONLY_800,5,1,20,0,1
+80,100,900,stealth,16,VALONLY_900,1,1,20,0,1
+80,100,900,stealth,16,VALONLY_900,2,1,20,0,1
+80,100,900,stealth,16,VALONLY_900,3,1,20,0,1
+80,100,900,stealth,16,VALONLY_900,4,1,20,0,1
+80,100,900,stealth,16,VALONLY_900,5,1,20,0,1

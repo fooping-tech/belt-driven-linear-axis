@@ -1,0 +1,11 @@
+speed_mm_s,accel_mm_s2,current_ma,chop_mode,microsteps,test_condition_id,repeat_index,sg_enabled,sg_interval_ms,sglog_enabled
+100,100,500,stealth,16,B_REPRO,1,1,20,0
+100,100,500,stealth,16,B_REPRO,2,1,20,0
+100,100,500,stealth,16,B_REPRO,3,1,20,0
+100,100,500,stealth,16,B_REPRO,4,1,20,0
+100,100,500,stealth,16,B_REPRO,5,1,20,0
+100,100,500,stealth,16,B_REPRO,6,1,20,0
+100,100,500,stealth,16,B_REPRO,7,1,20,0
+100,100,500,stealth,16,B_REPRO,8,1,20,0
+100,100,500,stealth,16,B_REPRO,9,1,20,0
+100,100,500,stealth,16,B_REPRO,10,1,20,0
