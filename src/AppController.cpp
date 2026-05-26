@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <esp_system.h>
+
 #if ACTIVE_DRIVER == DRIVER_TMC2209
 #include <TMCStepper.h>
 #endif
@@ -161,6 +163,14 @@ void AppController::begin() {
   M5.begin(cfg);
   Serial.begin(SERIAL_BAUDRATE);
   delay(100);
+  resetReason_ = static_cast<int>(esp_reset_reason());
+  if (HEARTBEAT_ENABLED) {
+    pinMode(PIN_HEARTBEAT, OUTPUT);
+    digitalWrite(PIN_HEARTBEAT, heartbeatState_ ? HIGH : LOW);
+  }
+  lastLoopTickUs_ = micros();
+  lastHeartbeatToggleMs_ = millis();
+  printResetReason();
 
   initDriverUart();
   driver_.begin();
@@ -186,6 +196,7 @@ void AppController::begin() {
 }
 
 void AppController::update() {
+  updateHeartbeatAndLoopStats();
   M5.update();
   limit_.isPressedDebounced();
   handleButton();
@@ -197,6 +208,67 @@ void AppController::update() {
   if (nowMs - lastDisplayMs_ >= 250) {
     lastDisplayMs_ = nowMs;
     drawStatus();
+  }
+}
+
+void AppController::updateHeartbeatAndLoopStats() {
+  const uint32_t nowUs = micros();
+  if (lastLoopTickUs_ != 0) {
+    lastLoopGapUs_ = nowUs - lastLoopTickUs_;
+    if (lastLoopGapUs_ > maxLoopGapUs_) {
+      maxLoopGapUs_ = lastLoopGapUs_;
+    }
+  }
+  lastLoopTickUs_ = nowUs;
+
+  if (!HEARTBEAT_ENABLED) {
+    return;
+  }
+  const uint32_t nowMs = millis();
+  if (nowMs - lastHeartbeatToggleMs_ >= HEARTBEAT_TOGGLE_INTERVAL_MS) {
+    lastHeartbeatToggleMs_ = nowMs;
+    heartbeatState_ = !heartbeatState_;
+    digitalWrite(PIN_HEARTBEAT, heartbeatState_ ? HIGH : LOW);
+  }
+}
+
+void AppController::printLoopDiagnostics() const {
+  Serial.printf("loop_diag,heartbeat_enabled=%u,heartbeat_pin=%d,last_loop_gap_us=%lu,max_loop_gap_us=%lu,reset_reason=%s\n",
+                HEARTBEAT_ENABLED ? 1 : 0,
+                PIN_HEARTBEAT,
+                static_cast<unsigned long>(lastLoopGapUs_),
+                static_cast<unsigned long>(maxLoopGapUs_),
+                resetReasonName());
+}
+
+void AppController::printResetReason() const {
+  Serial.printf("reset_reason=%s reset_reason_code=%d\n", resetReasonName(), resetReason_);
+}
+
+const char* AppController::resetReasonName() const {
+  switch (static_cast<esp_reset_reason_t>(resetReason_)) {
+    case ESP_RST_POWERON:
+      return "POWERON";
+    case ESP_RST_EXT:
+      return "EXTERNAL";
+    case ESP_RST_SW:
+      return "SOFTWARE";
+    case ESP_RST_PANIC:
+      return "PANIC";
+    case ESP_RST_INT_WDT:
+      return "WATCHDOG";
+    case ESP_RST_TASK_WDT:
+      return "WATCHDOG";
+    case ESP_RST_WDT:
+      return "WATCHDOG";
+    case ESP_RST_DEEPSLEEP:
+      return "DEEPSLEEP";
+    case ESP_RST_BROWNOUT:
+      return "BROWNOUT";
+    case ESP_RST_SDIO:
+      return "SDIO";
+    default:
+      return "UNKNOWN";
   }
 }
 
@@ -313,6 +385,11 @@ void AppController::processSerialLine(const String& line) {
 
   if (command == "s") {
     printStatus();
+    return;
+  }
+
+  if (command == "diag") {
+    printDiagnosticStatus();
     return;
   }
 
@@ -512,7 +589,7 @@ void AppController::processSerialLine(const String& line) {
     return;
   }
 
-  Serial.printf("Unknown command '%s'. Use h, 1, 5, b, s, on, off, v <mm/s>, a <mm/s2>, profile trap|direct, i <mA>, mode stealth|spread, microstep 16|8, m <mm> [mm/s], sg, mt, tmcv, sgreset, sgthrs <0-255>, tcool <0-1048575>, sgen <0|1>, sglog <0|1>, or sgint <ms>.\n", trimmed.c_str());
+  Serial.printf("Unknown command '%s'. Use h, 1, 5, b, s, diag, on, off, v <mm/s>, a <mm/s2>, profile trap|direct, i <mA>, mode stealth|spread, microstep 16|8, m <mm> [mm/s], sg, mt, tmcv, sgreset, sgthrs <0-255>, tcool <0-1048575>, sgen <0|1>, sglog <0|1>, or sgint <ms>.\n", trimmed.c_str());
 }
 
 bool AppController::parseSpeedCommand(const String& line, float& speedMmS) const {
@@ -1237,7 +1314,7 @@ void AppController::printMotionTimingSummary() {
   const String timeoutPositionText = state_ == State::Moving ? String(axis_.currentPositionMm(), 4) : "NA";
   const String timeoutTargetText = state_ == State::Moving ? String(motion_.targetMm(), 4) : "NA";
   const String timeoutRemainingText = state_ == State::Moving ? String(motion_.remainingSteps()) : "NA";
-  Serial.printf("MOTION_TIMING_SUMMARY,motion_update_count=%s,max_update_gap_us=%s,avg_update_gap_us=%s,move_start_limit_state=%s,move_end_limit_state=%s,home_end_limit_state=%s,timeout_limit_state=%s,limit_transition_count=%lu,limit_first_trigger_timing=%s,timeout_current_position=%s,timeout_target_position=%s,timeout_remaining_steps=%s\n",
+  Serial.printf("MOTION_TIMING_SUMMARY,motion_update_count=%s,max_update_gap_us=%s,avg_update_gap_us=%s,move_start_limit_state=%s,move_end_limit_state=%s,home_end_limit_state=%s,timeout_limit_state=%s,limit_transition_count=%lu,limit_first_trigger_timing=%s,timeout_current_position=%s,timeout_target_position=%s,timeout_remaining_steps=%s,heartbeat_enabled=%u,heartbeat_pin=%d,last_loop_gap_us=%lu,max_loop_gap_us=%lu,reset_reason=%s\n",
                 timingCountText.c_str(),
                 timingMaxGapText.c_str(),
                 timingAvgGapText.c_str(),
@@ -1249,7 +1326,12 @@ void AppController::printMotionTimingSummary() {
                 limitFirstTriggerTiming,
                 timeoutPositionText.c_str(),
                 timeoutTargetText.c_str(),
-                timeoutRemainingText.c_str());
+                timeoutRemainingText.c_str(),
+                HEARTBEAT_ENABLED ? 1 : 0,
+                PIN_HEARTBEAT,
+                static_cast<unsigned long>(lastLoopGapUs_),
+                static_cast<unsigned long>(maxLoopGapUs_),
+                resetReasonName());
 }
 
 void AppController::printRejectDetail(const char* stage, const char* reason) {
@@ -1559,6 +1641,7 @@ void AppController::printStatus() {
   Serial.printf("motorPower=%s stepDriverEnabled=%s\n",
                 motorPowerEnabled_ ? "ON" : "OFF",
                 driver_.isEnabled() ? "true" : "false");
+  printLoopDiagnostics();
 #if ACTIVE_DRIVER == DRIVER_TMC2209
   Serial.printf("tmc2209_uart=%s test_connection=%u microsteps=1/%u stepsPerMm=%.2f runtimeCurrent=%u mA chopMode=%s\n",
                 tmcUartOk ? "OK" : "FAIL",
@@ -1586,6 +1669,32 @@ void AppController::printStatus() {
                 TMC_TPOWERDOWN,
                 TmcDriver.IFCNT());
 #endif
+}
+
+void AppController::printDiagnosticStatus() {
+  const char* activeNoStepReason = state_ == State::Homing ? homing_.lastNoStepReasonName() : motion_.lastNoStepReasonName();
+  Serial.printf("DIAG,app_state=%s,homing_state=%s,motion_state=%s,current_position_steps=%ld,target_steps=%ld,remaining_steps=%ld,limit_raw=%s,limit_debounced=%s,motion_current_speed_steps_s=%.2f,motion_step_interval_us=%lu,motion_last_step_us=%lu,now_us=%lu,last_step_pulse_us=%lu,step_pulse_count=%lu,last_no_step_reason=%s,motion_no_step_reason=%s,homing_no_step_reason=%s,last_move_reject_reason=%s,heartbeat_enabled=%u,max_loop_gap_us=%lu,max_motion_update_gap_us=%lu\n",
+                stateName(),
+                homing_.stateName(),
+                motion_.stateName(),
+                axis_.currentPositionSteps(),
+                motion_.targetSteps(),
+                motion_.remainingSteps(),
+                limit_.isPressedRaw() ? "ON" : "OFF",
+                limit_.isPressedDebounced() ? "ON" : "OFF",
+                motion_.currentSpeedStepsS(),
+                static_cast<unsigned long>(motion_.currentStepIntervalUs()),
+                static_cast<unsigned long>(motion_.lastStepUs()),
+                static_cast<unsigned long>(micros()),
+                static_cast<unsigned long>(driver_.lastStepPulseUs()),
+                static_cast<unsigned long>(driver_.stepPulseCount()),
+                activeNoStepReason,
+                motion_.lastNoStepReasonName(),
+                homing_.lastNoStepReasonName(),
+                axis_.lastMoveRejectReasonName(),
+                HEARTBEAT_ENABLED ? 1 : 0,
+                static_cast<unsigned long>(maxLoopGapUs_),
+                static_cast<unsigned long>(motion_.timingMaxUpdateGapUs()));
 }
 
 void AppController::drawStatus() {

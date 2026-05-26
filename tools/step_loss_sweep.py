@@ -103,6 +103,12 @@ RESULT_COLUMNS = (
     "timeout_motion_state",
     "timeout_last_step_time_ms",
     "timeout_expected_duration_ms",
+    "timeout_phase",
+    "timeout_command",
+    "timeout_firmware_responsive",
+    "timeout_diag_probe",
+    "timeout_status_probe",
+    "timeout_mt_probe",
     "expected_position",
     "actual_position",
     "abs_error_mm",
@@ -123,11 +129,21 @@ FAILURE_LEGEND = {
     "OK": "pass",
     "SL": "suspected step loss",
     "TO": "timeout",
+    "SETUP_TO": "setup command timeout",
     "HE": "homing error",
     "ME": "motion error",
     "RE": "command rejected",
     "LOFF": "final limit OFF",
     "LPOS": "final limit ON too far from zero",
+}
+
+SETUP_EXPECTS = {
+    "microstep": ("TMC2209 microstep set:", "microstep command ignored:", "sim:"),
+    "current": ("TMC2209 current set:", "Current command ignored:", "sim:"),
+    "mode": ("TMC2209 chop mode set:", "Chop mode command ignored:", "sim:"),
+    "profile": ("Motion profile set:", "sim:"),
+    "accel": ("Acceleration set:", "sim:"),
+    "speed": ("Default move speed set:", "sim:"),
 }
 
 
@@ -217,6 +233,25 @@ class TestOutcome:
     sg: SgStats
     final_status: str
     log_excerpt: list[str]
+    timeout_diag: "TimeoutDiagnostic | None" = None
+
+
+@dataclasses.dataclass
+class TimeoutDiagnostic:
+    phase: str
+    command: str
+    elapsed_ms: int
+    serial_tail: list[str]
+    diag_code: str
+    diag_lines: list[str]
+    status_code: str
+    status_lines: list[str]
+    mt_code: str
+    mt_lines: list[str]
+
+    @property
+    def firmware_responsive(self) -> bool:
+        return self.diag_code == "OK" or self.status_code == "OK" or self.mt_code == "OK"
 
 
 @dataclasses.dataclass
@@ -275,15 +310,27 @@ class SerialRunner:
         expect: Iterable[str],
         timeout_sec: float,
         reject_as_error: bool = True,
+        phase: str | None = None,
+        no_line_probe_interval_sec: float | None = None,
     ) -> tuple[bool, str, list[str]]:
         self.send(command)
         expected = tuple(expect)
         deadline = time.monotonic() + timeout_sec
+        last_line_at = time.monotonic()
         lines: list[str] = []
         while time.monotonic() < deadline:
             line = self.read_line()
             if line is None:
+                now = time.monotonic()
+                if phase is not None and no_line_probe_interval_sec is not None and now - last_line_at >= no_line_probe_interval_sec:
+                    no_serial_ms = int(round((now - last_line_at) * 1000.0))
+                    probe_line = f"[probe] phase={phase} command={command} no_serial_for={no_serial_ms}ms"
+                    print(probe_line, flush=True)
+                    lines.append(probe_line)
+                    self.send("diag")
+                    last_line_at = now
                 continue
+            last_line_at = time.monotonic()
             lines.append(line)
             lowered = line.lower()
             if reject_as_error and ("rejected" in lowered or lowered.startswith("unknown command")):
@@ -296,6 +343,25 @@ class SerialRunner:
                 return True, "OK", lines
         return False, "TO", lines
 
+    def send_and_wait_raw_no_probe(
+        self,
+        command: str,
+        expect: Iterable[str],
+        timeout_sec: float,
+    ) -> tuple[bool, str, list[str]]:
+        self.send(command)
+        expected = tuple(expect)
+        deadline = time.monotonic() + timeout_sec
+        lines: list[str] = []
+        while time.monotonic() < deadline:
+            line = self.read_line()
+            if line is None:
+                continue
+            lines.append(line)
+            if any(marker in line for marker in expected):
+                return True, "OK", lines
+        return False, "TO", lines
+
     def wait_for_homing(self, timeout_sec: float) -> tuple[bool, str, list[str]]:
         return self.send_and_wait("h", ("Homing complete",), timeout_sec)
 
@@ -304,6 +370,24 @@ class SerialRunner:
 
     def status(self, timeout_sec: float = 2.0) -> tuple[str, list[str]]:
         ok, code, lines = self.send_and_wait("s", ("state=",), timeout_sec, reject_as_error=False)
+        if not ok:
+            return code, lines
+        return "OK", lines
+
+    def status_no_probe(self, timeout_sec: float = 2.0) -> tuple[str, list[str]]:
+        ok, code, lines = self.send_and_wait_raw_no_probe("s", ("state=",), timeout_sec)
+        if not ok:
+            return code, lines
+        return "OK", lines
+
+    def motion_timing_no_probe(self, timeout_sec: float = 2.0) -> tuple[str, list[str]]:
+        ok, code, lines = self.send_and_wait_raw_no_probe("mt", ("MOTION_TIMING_SUMMARY",), timeout_sec)
+        if not ok:
+            return code, lines
+        return "OK", lines
+
+    def diag_no_probe(self, timeout_sec: float = 1.0) -> tuple[str, list[str]]:
+        ok, code, lines = self.send_and_wait_raw_no_probe("diag", ("DIAG,",), timeout_sec)
         if not ok:
             return code, lines
         return "OK", lines
@@ -328,8 +412,10 @@ class SimulatedRunner:
         expect: Iterable[str],
         timeout_sec: float,
         reject_as_error: bool = True,
+        phase: str | None = None,
+        no_line_probe_interval_sec: float | None = None,
     ) -> tuple[bool, str, list[str]]:
-        _ = expect, timeout_sec, reject_as_error
+        _ = expect, timeout_sec, reject_as_error, phase, no_line_probe_interval_sec
         if command.startswith("microstep ") or command.startswith("i ") or command.startswith("mode "):
             return True, "OK", [f"sim: {command}"]
         if command.startswith("profile "):
@@ -355,9 +441,32 @@ class SimulatedRunner:
             self.position_units -= 1
         return True, "OK", ["Move complete", self._status_line()]
 
+    def send_and_wait_raw_no_probe(
+        self,
+        command: str,
+        expect: Iterable[str],
+        timeout_sec: float,
+    ) -> tuple[bool, str, list[str]]:
+        return self.send_and_wait(command, expect, timeout_sec, reject_as_error=False)
+
     def status(self, timeout_sec: float = 2.0) -> tuple[str, list[str]]:
         _ = timeout_sec
         return "OK", [self._status_line()]
+
+    def status_no_probe(self, timeout_sec: float = 2.0) -> tuple[str, list[str]]:
+        return self.status(timeout_sec)
+
+    def motion_timing_no_probe(self, timeout_sec: float = 2.0) -> tuple[str, list[str]]:
+        _ = timeout_sec
+        return "OK", [
+            "MOTION_TIMING_SUMMARY,motion_update_count=1,max_update_gap_us=0,avg_update_gap_us=0.0,move_start_limit_state=OFF,move_end_limit_state=ON,home_end_limit_state=ON,timeout_limit_state=NA,limit_transition_count=1,limit_first_trigger_timing=DURING_MOVE,timeout_current_position=NA,timeout_target_position=NA,timeout_remaining_steps=NA"
+        ]
+
+    def diag_no_probe(self, timeout_sec: float = 1.0) -> tuple[str, list[str]]:
+        _ = timeout_sec
+        return "OK", [
+            "DIAG,app_state=Ready,homing_state=Done,motion_state=Idle,current_position_steps=0,target_steps=0,remaining_steps=0,limit_raw=ON,limit_debounced=ON,motion_current_speed_steps_s=0.00,motion_step_interval_us=0,motion_last_step_us=0,now_us=0,last_step_pulse_us=0,step_pulse_count=0,last_no_step_reason=NOT_MOVING,motion_no_step_reason=NOT_MOVING,homing_no_step_reason=DONE,last_move_reject_reason=NONE,heartbeat_enabled=1,max_loop_gap_us=0,max_motion_update_gap_us=0"
+        ]
 
     def _status_line(self) -> str:
         limit = "ON" if self.position_units <= 0 else "OFF"
@@ -384,7 +493,7 @@ def main() -> int:
             runner.drain(0.2)
             prefix = f"[{index}/{len(params)}] speed={fmt_num(param.speed_mm_s)} accel={fmt_num(param.accel_mm_s2)} current={param.current_ma} mode={param.chop_mode} microsteps={param.microsteps}"
             print(prefix, flush=True)
-            result = run_param(runner, param, args.return_speed, args.command_timeout, args.homing_timeout, args.limit_position_tolerance, args.limit_settle_sec, timestamp)
+            result = run_param(runner, param, args.return_speed, args.command_timeout, args.homing_timeout, args.limit_position_tolerance, args.limit_settle_sec, args.no_line_probe_interval, timestamp)
             if result.final_result != "PASS":
                 runner.drain(0.5)
             results.append(result)
@@ -467,6 +576,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--homing-timeout", type=float, default=45.0, help="timeout for homing")
     parser.add_argument("--limit-position-tolerance", type=float, default=0.5, help="max final position error in mm when the limit turns ON")
     parser.add_argument("--limit-settle-sec", type=float, default=0.2, help="extra wait after final b when raw limit is ON but debounced limit is still OFF")
+    parser.add_argument("--no-line-probe-interval", type=float, default=1.0, help="send lightweight diag probe after this many seconds without serial lines during long waits; <=0 disables")
     parser.add_argument("--skip-plot-report", action="store_true", help="do not run tools/plot_step_loss_sweep.py after writing the sweep CSV")
     parser.add_argument("--no-plot-cell-labels", action="store_true", help="do not label cells in generated plot heatmaps")
     parser.add_argument("--plot-error-scale", choices=("linear", "log"), default="linear", help="error scale for generated plot report")
@@ -607,6 +717,7 @@ def run_param(
     homing_timeout: float,
     limit_position_tolerance: float,
     limit_settle_sec: float,
+    no_line_probe_interval_sec: float,
     timestamp: str,
 ) -> SweepResult:
     start = time.monotonic()
@@ -626,8 +737,8 @@ def run_param(
             log_excerpt=[],
         )
     else:
-        test1 = run_test(runner, param, "test1", ["1", "1", "1", "1", "1"], return_speed, command_timeout, homing_timeout, limit_position_tolerance, limit_settle_sec)
-        test2 = run_test(runner, param, "test2", ["5"], return_speed, command_timeout, homing_timeout, limit_position_tolerance, limit_settle_sec)
+        test1 = run_test(runner, param, "test1", ["1", "1", "1", "1", "1"], return_speed, command_timeout, homing_timeout, limit_position_tolerance, limit_settle_sec, no_line_probe_interval_sec)
+        test2 = run_test(runner, param, "test2", ["5"], return_speed, command_timeout, homing_timeout, limit_position_tolerance, limit_settle_sec, no_line_probe_interval_sec)
     final_result = "PASS" if test1.result == "PASS" and test2.result == "PASS" else "FAIL"
     if final_result == "PASS":
         failure_reason = "OK"
@@ -669,28 +780,44 @@ def run_current_validate_only(
 ) -> TestOutcome:
     log: list[str] = []
     setup_commands = [
-        (f"microstep {param.microsteps}", ("microstep set", "sim:")),
-        (f"i {param.current_ma}", ("current set", "sim:")),
-        (f"mode {param.chop_mode}", ("chop mode set", "sim:")),
-        (f"v {fmt_num(param.speed_mm_s)}", ("Default move speed set", "sim:")),
+        (f"microstep {param.microsteps}", SETUP_EXPECTS["microstep"]),
+        (f"i {param.current_ma}", SETUP_EXPECTS["current"]),
+        (f"mode {param.chop_mode}", SETUP_EXPECTS["mode"]),
+        (f"v {fmt_num(param.speed_mm_s)}", SETUP_EXPECTS["speed"]),
     ]
     for command, expect in setup_commands:
+        started = time.monotonic()
         ok, code, lines = runner.send_and_wait(command, expect, 5.0)
+        elapsed_ms = elapsed_ms_since(started)
         log.extend(tag_lines(command, lines))
         if not ok:
+            if code == "TO":
+                diag = diagnose_timeout(runner, f"{name}:setup:{command.split()[0]}", command, elapsed_ms, lines, log)
+                return outcome(name, "FAIL", "SETUP_TO", parse_limit_state(diag.status_lines), "UNKNOWN", last_status(diag.status_lines), log, limit_position_tolerance, diag)
             return outcome(name, "FAIL", code, "UNKNOWN", "UNKNOWN", last_status(lines), log, limit_position_tolerance)
+    started = time.monotonic()
     ok, code, lines = runner.send_and_wait("tmcv", ("TMC validate", "sim:"), 5.0, reject_as_error=False)
+    elapsed_ms = elapsed_ms_since(started)
     log.extend(tag_lines("tmcv", lines))
     if not ok:
+        if code == "TO":
+            diag = diagnose_timeout(runner, f"{name}:setup:tmcv", "tmcv", elapsed_ms, lines, log)
+            return outcome(name, "FAIL", "TO", parse_limit_state(diag.status_lines), "UNKNOWN", last_status(diag.status_lines), log, limit_position_tolerance, diag)
         return outcome(name, "FAIL", code, "UNKNOWN", "UNKNOWN", last_status(lines), log, limit_position_tolerance)
+    started = time.monotonic()
     ok, code, lines = runner.send_and_wait("s", ("state=", "sim:"), 2.0, reject_as_error=False)
+    elapsed_ms = elapsed_ms_since(started)
     log.extend(tag_lines("s", lines))
     final_status = last_status(lines)
+    timeout_diag = None
+    if not ok and code == "TO":
+        timeout_diag = diagnose_timeout(runner, f"{name}:status:validate", "s", elapsed_ms, lines, log)
+        final_status = last_status(timeout_diag.status_lines)
     return TestOutcome(
         name=name,
         result="PASS" if ok else "FAIL",
         failure_reason="OK" if ok else code,
-        final_limit_state=parse_limit_state(lines),
+        final_limit_state=parse_limit_state(timeout_diag.status_lines if timeout_diag is not None else lines),
         final_limit_timing="VALIDATE_ONLY",
         score=100.0 if ok else 0.0,
         final_error_mm=final_error_mm(final_status, log),
@@ -698,6 +825,7 @@ def run_current_validate_only(
         sg=parse_sg_stats(log),
         final_status=final_status,
         log_excerpt=trim_log(log),
+        timeout_diag=timeout_diag,
     )
 
 
@@ -711,30 +839,48 @@ def run_test(
     homing_timeout: float,
     limit_position_tolerance: float,
     limit_settle_sec: float,
+    no_line_probe_interval_sec: float,
 ) -> TestOutcome:
     log: list[str] = []
+    probe_interval = no_line_probe_interval_sec if no_line_probe_interval_sec > 0.0 else None
 
     setup_commands = [
-        (f"microstep {param.microsteps}", ("microstep set", "sim:")),
-        (f"i {param.current_ma}", ("current set", "sim:")),
-        (f"mode {param.chop_mode}", ("chop mode set", "sim:")),
-        ("profile trap", ("Motion profile set",)),
-        (f"a {fmt_num(param.accel_mm_s2)}", ("Acceleration set",)),
+        (f"microstep {param.microsteps}", SETUP_EXPECTS["microstep"]),
+        (f"i {param.current_ma}", SETUP_EXPECTS["current"]),
+        (f"mode {param.chop_mode}", SETUP_EXPECTS["mode"]),
+        ("profile trap", SETUP_EXPECTS["profile"]),
+        (f"a {fmt_num(param.accel_mm_s2)}", SETUP_EXPECTS["accel"]),
     ]
     for command, expect in setup_commands:
-        ok, code, lines = runner.send_and_wait(command, expect, 5.0)
+        started = time.monotonic()
+        ok, code, lines = runner.send_and_wait(command, expect, 5.0, phase=f"{name}:setup:{command.split()[0]}", no_line_probe_interval_sec=probe_interval)
+        elapsed_ms = elapsed_ms_since(started)
         log.extend(tag_lines(command, lines))
         if not ok:
+            if code == "TO":
+                diag = diagnose_timeout(runner, f"{name}:setup:{command.split()[0]}", command, elapsed_ms, lines, log)
+                return outcome(name, "FAIL", "SETUP_TO", parse_limit_state(diag.status_lines), "UNKNOWN", last_status(diag.status_lines), log, limit_position_tolerance, diag)
             return outcome(name, "FAIL", code, "UNKNOWN", "UNKNOWN", "", log, limit_position_tolerance)
 
-    ok, code, lines = runner.wait_for_homing(homing_timeout)
+    started = time.monotonic()
+    ok, code, lines = runner.send_and_wait("h", ("Homing complete",), homing_timeout, phase=f"{name}:homing", no_line_probe_interval_sec=probe_interval)
+    elapsed_ms = elapsed_ms_since(started)
     log.extend(tag_lines("h", lines))
     if not ok:
-        return outcome(name, "FAIL", "HE" if code in ("TO", "HE") else code, "UNKNOWN", "UNKNOWN", last_status(lines), log, limit_position_tolerance)
+        if code == "TO":
+            diag = diagnose_timeout(runner, f"{name}:homing", "h", elapsed_ms, lines, log)
+            return outcome(name, "FAIL", "TO", parse_limit_state(diag.status_lines), "UNKNOWN", last_status(diag.status_lines), log, limit_position_tolerance, diag)
+        return outcome(name, "FAIL", "HE" if code == "HE" else code, "UNKNOWN", "UNKNOWN", last_status(lines), log, limit_position_tolerance)
 
-    ok, code, lines = runner.send_and_wait(f"v {fmt_num(param.speed_mm_s)}", ("Default move speed set",), 5.0)
-    log.extend(tag_lines(f"v {fmt_num(param.speed_mm_s)}", lines))
+    speed_command = f"v {fmt_num(param.speed_mm_s)}"
+    started = time.monotonic()
+    ok, code, lines = runner.send_and_wait(speed_command, SETUP_EXPECTS["speed"], 5.0, phase=f"{name}:setup:v", no_line_probe_interval_sec=probe_interval)
+    elapsed_ms = elapsed_ms_since(started)
+    log.extend(tag_lines(speed_command, lines))
     if not ok:
+        if code == "TO":
+            diag = diagnose_timeout(runner, f"{name}:setup:v", speed_command, elapsed_ms, lines, log)
+            return outcome(name, "FAIL", "SETUP_TO", parse_limit_state(diag.status_lines), "UNKNOWN", last_status(diag.status_lines), log, limit_position_tolerance, diag)
         return outcome(name, "FAIL", code, "UNKNOWN", "UNKNOWN", last_status(lines), log, limit_position_tolerance)
 
     sg_control_commands: list[tuple[str, tuple[str, ...]]] = []
@@ -746,45 +892,79 @@ def run_test(
         sg_control_commands.append((f"sgint {param.sg_interval_ms}", ("SG sample interval set", "sim:")))
 
     for command, expect in sg_control_commands:
-        ok, code, lines = runner.send_and_wait(command, expect, 5.0)
+        started = time.monotonic()
+        ok, code, lines = runner.send_and_wait(command, expect, 5.0, phase=f"{name}:setup:{command.split()[0]}", no_line_probe_interval_sec=probe_interval)
+        elapsed_ms = elapsed_ms_since(started)
         log.extend(tag_lines(command, lines))
         if not ok:
+            if code == "TO":
+                diag = diagnose_timeout(runner, f"{name}:setup:{command.split()[0]}", command, elapsed_ms, lines, log)
+                return outcome(name, "FAIL", "SETUP_TO", parse_limit_state(diag.status_lines), "UNKNOWN", last_status(diag.status_lines), log, limit_position_tolerance, diag)
             return outcome(name, "FAIL", code, "UNKNOWN", "UNKNOWN", last_status(lines), log, limit_position_tolerance)
 
-    ok, code, lines = runner.send_and_wait("sgreset", ("SG stats reset", "sim:"), 5.0)
+    started = time.monotonic()
+    ok, code, lines = runner.send_and_wait("sgreset", ("SG stats reset", "sim:"), 5.0, phase=f"{name}:setup:sgreset", no_line_probe_interval_sec=probe_interval)
+    elapsed_ms = elapsed_ms_since(started)
     log.extend(tag_lines("sgreset", lines))
     if not ok:
+        if code == "TO":
+            diag = diagnose_timeout(runner, f"{name}:setup:sgreset", "sgreset", elapsed_ms, lines, log)
+            return outcome(name, "FAIL", "TO", parse_limit_state(diag.status_lines), "UNKNOWN", last_status(diag.status_lines), log, limit_position_tolerance, diag)
         return outcome(name, "FAIL", code, "UNKNOWN", "UNKNOWN", last_status(lines), log, limit_position_tolerance)
 
-    for command in forward_commands:
-        ok, code, lines = runner.wait_for_move(command, command_timeout)
+    for index, command in enumerate(forward_commands, start=1):
+        started = time.monotonic()
+        phase = f"{name}:move:{index}"
+        ok, code, lines = runner.send_and_wait(command, ("Move complete",), command_timeout, phase=phase, no_line_probe_interval_sec=probe_interval)
+        elapsed_ms = elapsed_ms_since(started)
         log.extend(tag_lines(command, lines))
         if not ok:
+            if code == "TO":
+                diag = diagnose_timeout(runner, f"{name}:move:{index}", command, elapsed_ms, lines, log)
+                final_lines = diag.status_lines or lines
+                return outcome(name, "FAIL", "TO", parse_limit_state(final_lines), "UNKNOWN", last_status(final_lines), log, limit_position_tolerance, diag)
             poll_motion_timing(runner, log)
             return outcome(name, "FAIL", code, parse_limit_state(lines), "UNKNOWN", last_status(lines), log, limit_position_tolerance)
 
     poll_motion_timing(runner, log)
 
-    ok, code, lines = runner.send_and_wait(f"v {fmt_num(return_speed)}", ("Default move speed set",), 5.0)
-    log.extend(tag_lines(f"v {fmt_num(return_speed)}", lines))
+    return_speed_command = f"v {fmt_num(return_speed)}"
+    started = time.monotonic()
+    ok, code, lines = runner.send_and_wait(return_speed_command, SETUP_EXPECTS["speed"], 5.0, phase=f"{name}:setup:return_speed", no_line_probe_interval_sec=probe_interval)
+    elapsed_ms = elapsed_ms_since(started)
+    log.extend(tag_lines(return_speed_command, lines))
     if not ok:
+        if code == "TO":
+            diag = diagnose_timeout(runner, f"{name}:setup:return_speed", return_speed_command, elapsed_ms, lines, log)
+            return outcome(name, "FAIL", "SETUP_TO", parse_limit_state(diag.status_lines), "UNKNOWN", last_status(diag.status_lines), log, limit_position_tolerance, diag)
         return outcome(name, "FAIL", code, parse_limit_state(lines), "UNKNOWN", last_status(lines), log, limit_position_tolerance)
 
     final_lines: list[str] = []
     for index in range(5):
-        ok, code, lines = runner.wait_for_move("b", command_timeout)
+        started = time.monotonic()
+        phase = f"{name}:return:b:{index + 1}"
+        ok, code, lines = runner.send_and_wait("b", ("Move complete",), command_timeout, phase=phase, no_line_probe_interval_sec=probe_interval)
+        elapsed_ms = elapsed_ms_since(started)
         log.extend(tag_lines("b", lines))
         final_lines = lines
         if not ok:
+            if code == "TO":
+                diag = diagnose_timeout(runner, f"{name}:return:b:{index + 1}", "b", elapsed_ms, lines, log)
+                final_lines = diag.status_lines or lines
+                return outcome(name, "FAIL", "TO", parse_limit_state(final_lines), "UNKNOWN", last_status(final_lines), log, limit_position_tolerance, diag)
             poll_motion_timing(runner, log)
             if index == 4 and code == "ME":
+                started = time.monotonic()
                 status_code, status_lines = runner.status()
+                elapsed_ms = elapsed_ms_since(started)
                 log.extend(tag_lines("s", status_lines))
                 final_lines = status_lines or final_lines
                 final_status = last_status(final_lines)
                 final_limit = parse_limit_state(final_lines)
                 if status_code == "TO":
-                    return outcome(name, "FAIL", "TO", final_limit, "UNKNOWN", final_status, log, limit_position_tolerance)
+                    diag = diagnose_timeout(runner, f"{name}:status:after_motion_error", "s", elapsed_ms, status_lines, log)
+                    final_lines = diag.status_lines or final_lines
+                    return outcome(name, "FAIL", "TO", parse_limit_state(final_lines), "UNKNOWN", last_status(final_lines), log, limit_position_tolerance, diag)
                 if final_limit == "ON":
                     if not final_position_within_tolerance(final_status, log, limit_position_tolerance):
                         return outcome(name, "FAIL", "LPOS", final_limit, "DURING_MOVE", final_status, log, limit_position_tolerance)
@@ -796,7 +976,9 @@ def run_test(
                 return outcome(name, "PASS", "OK", early_limit, early_timing, early_status, log, limit_position_tolerance)
             return outcome(name, "FAIL", code, early_limit, early_timing, early_status, log, limit_position_tolerance)
 
+    started = time.monotonic()
     status_code, status_lines = runner.status()
+    elapsed_ms = elapsed_ms_since(started)
     log.extend(tag_lines("s", status_lines))
     final_lines = status_lines or final_lines
     final_status = last_status(final_lines)
@@ -812,7 +994,9 @@ def run_test(
             if final_limit == "ON" and final_position_within_tolerance(final_status, log, limit_position_tolerance):
                 return outcome(name, "PASS", "OK", final_limit, "AFTER_SETTLE", final_status, log, limit_position_tolerance)
     if status_code == "TO":
-        return outcome(name, "FAIL", "TO", final_limit, "UNKNOWN", final_status, log, limit_position_tolerance)
+        diag = diagnose_timeout(runner, f"{name}:status:final", "s", elapsed_ms, status_lines, log)
+        final_lines = diag.status_lines or final_lines
+        return outcome(name, "FAIL", "TO", parse_limit_state(final_lines), "UNKNOWN", last_status(final_lines), log, limit_position_tolerance, diag)
     if final_limit == "ON":
         if not final_position_within_tolerance(final_status, log, limit_position_tolerance):
             return outcome(name, "FAIL", "LPOS", final_limit, "AFTER_COMPLETE", final_status, log, limit_position_tolerance)
@@ -831,6 +1015,7 @@ def outcome(
     final_status: str,
     log: list[str],
     tolerance_mm: float = 0.5,
+    timeout_diag: TimeoutDiagnostic | None = None,
 ) -> TestOutcome:
     error_mm = final_error_mm(final_status, log)
     remaining_steps = final_remaining_steps(log)
@@ -846,6 +1031,7 @@ def outcome(
         sg=parse_sg_stats(log),
         final_status=final_status,
         log_excerpt=trim_log(log),
+        timeout_diag=timeout_diag,
     )
 
 
@@ -853,6 +1039,47 @@ def poll_motion_timing(runner: SerialRunner | SimulatedRunner, log: list[str]) -
     ok, _code, lines = runner.send_and_wait("mt", ("MOTION_TIMING_SUMMARY", "sim:"), 1.0, reject_as_error=False)
     _ = ok
     log.extend(tag_lines("mt", lines))
+
+
+def elapsed_ms_since(started: float) -> int:
+    return int(round((time.monotonic() - started) * 1000.0))
+
+
+def diagnose_timeout(
+    runner: SerialRunner | SimulatedRunner,
+    phase: str,
+    command: str,
+    elapsed_ms: int,
+    timeout_lines: list[str],
+    log: list[str],
+) -> TimeoutDiagnostic:
+    serial_tail = timeout_lines[-10:]
+    diag_code, diag_lines = runner.diag_no_probe(1.0)
+    status_code, status_lines = runner.status_no_probe(2.0)
+    mt_code, mt_lines = runner.motion_timing_no_probe(2.0)
+    diag = TimeoutDiagnostic(
+        phase=phase,
+        command=command,
+        elapsed_ms=elapsed_ms,
+        serial_tail=serial_tail,
+        diag_code=diag_code,
+        diag_lines=diag_lines,
+        status_code=status_code,
+        status_lines=status_lines,
+        mt_code=mt_code,
+        mt_lines=mt_lines,
+    )
+    log.append(
+        "TO_DIAG,"
+        f"phase={phase},command={command},elapsed_ms={elapsed_ms},"
+        f"firmware_responsive={'yes' if diag.firmware_responsive else 'no'},"
+        f"diag={diag_code},status={status_code},mt={mt_code}"
+    )
+    log.extend(tag_lines("TO serial tail", serial_tail))
+    log.extend(tag_lines("diag probe", diag_lines))
+    log.extend(tag_lines("s probe", status_lines))
+    log.extend(tag_lines("mt probe", mt_lines))
+    return diag
 
 
 def parse_sg_stats(lines: list[str]) -> SgStats:
@@ -1371,12 +1598,25 @@ def format_optional_int(value: int | None) -> str:
 
 
 def format_test_outcome(test: TestOutcome) -> str:
-    return (
+    text = (
         f"{test.result} score={test.score:.1f} reason={test.failure_reason} "
         f"limit={test.final_limit_state} timing={test.final_limit_timing} "
         f"error={format_optional_mm(test.final_error_mm)} "
         f"remainingSteps={format_optional_int(test.final_remaining_steps)}"
     )
+    if is_timeout_reason(test.failure_reason) and test.timeout_diag is not None:
+        diag = test.timeout_diag
+        text += (
+            f" phase={diag.phase} command={diag.command} "
+            f"elapsed_ms={diag.elapsed_ms} "
+            f"firmware={'yes' if diag.firmware_responsive else 'no'} "
+            f"diag={diag.diag_code} status={diag.status_code} mt={diag.mt_code}"
+        )
+    return text
+
+
+def is_timeout_reason(reason: str) -> bool:
+    return reason in ("TO", "SETUP_TO")
 
 
 def write_results_csv(path: Path, results: list[SweepResult]) -> None:
@@ -1457,7 +1697,8 @@ def result_csv_row(result: SweepResult) -> dict[str, str | int | float]:
     failure_detail, failure_stage, failure_evidence = classify_failure(result)
     diagnostic = sg_diagnostic(result)
     motion_detail = result_motion_error_detail(result)
-    timeout_stage = failure_stage if result.failure_reason == "TO" else None
+    timeout_diag = first_failed_test(result.test1, result.test2).timeout_diag if is_timeout_reason(result.failure_reason) else None
+    timeout_stage = timeout_diag.phase if timeout_diag is not None else (failure_stage if is_timeout_reason(result.failure_reason) else None)
     current_error = current_error_ma(result)
     current_ratio = current_error_ratio(result)
     current_tolerance = current_tolerance_ma(result)
@@ -1541,10 +1782,16 @@ def result_csv_row(result: SweepResult) -> dict[str, str | int | float]:
         "failure_stage": failure_stage,
         "failure_evidence": failure_evidence,
         "timeout_stage": missing if timeout_stage is None else timeout_stage,
-        "timeout_elapsed_ms": missing if result.failure_reason != "TO" else f"{result.elapsed_sec * 1000.0:.0f}",
-        "timeout_motion_state": missing if result.failure_reason != "TO" else (sg.motion_state_before_re or "NA"),
+        "timeout_elapsed_ms": missing if not is_timeout_reason(result.failure_reason) else (str(timeout_diag.elapsed_ms) if timeout_diag is not None else f"{result.elapsed_sec * 1000.0:.0f}"),
+        "timeout_motion_state": missing if not is_timeout_reason(result.failure_reason) else (sg.motion_state_before_re or "NA"),
         "timeout_last_step_time_ms": missing,
         "timeout_expected_duration_ms": timeout_expected_duration_ms_text(result),
+        "timeout_phase": missing if timeout_diag is None else timeout_diag.phase,
+        "timeout_command": missing if timeout_diag is None else timeout_diag.command,
+        "timeout_firmware_responsive": missing if timeout_diag is None else ("yes" if timeout_diag.firmware_responsive else "no"),
+        "timeout_diag_probe": missing if timeout_diag is None else timeout_diag.diag_code,
+        "timeout_status_probe": missing if timeout_diag is None else timeout_diag.status_code,
+        "timeout_mt_probe": missing if timeout_diag is None else timeout_diag.mt_code,
         "expected_position": missing if motion_detail is None else f"{motion_detail['target']:.4f}",
         "actual_position": missing if motion_detail is None else f"{motion_detail['pos']:.4f}",
         "abs_error_mm": missing if result.final_error_mm is None else f"{abs(result.final_error_mm):.4f}",
@@ -1567,18 +1814,31 @@ def classify_failure(result: SweepResult) -> tuple[str, str, str]:
         return "OK", "complete", "existing_logic_pass"
 
     failed = first_failed_test(result.test1, result.test2)
-    stage = failed.name
+    stage = failed.timeout_diag.phase if is_timeout_reason(result.failure_reason) and failed.timeout_diag is not None else failed.name
     evidence_parts = [
         f"reason={result.failure_reason}",
         f"limit={result.final_limit_state}",
         f"timing={result.final_limit_timing}",
     ]
+    if failed.timeout_diag is not None:
+        evidence_parts.extend(
+            [
+                f"phase={failed.timeout_diag.phase}",
+                f"command={failed.timeout_diag.command}",
+                f"firmware_responsive={'yes' if failed.timeout_diag.firmware_responsive else 'no'}",
+                f"diag_probe={failed.timeout_diag.diag_code}",
+                f"status_probe={failed.timeout_diag.status_code}",
+                f"mt_probe={failed.timeout_diag.mt_code}",
+            ]
+        )
     if result.final_error_mm is not None:
         evidence_parts.append(f"error_mm={result.final_error_mm:.4f}")
     if result.final_remaining_steps is not None:
         evidence_parts.append(f"remaining_steps={result.final_remaining_steps}")
 
-    if result.failure_reason == "TO":
+    if result.failure_reason == "SETUP_TO":
+        detail = "SETUP_EXPECT_MISMATCH_OR_LOG_LOSS"
+    elif result.failure_reason == "TO":
         detail = timeout_failure_detail(result)
     elif result.failure_reason == "ME":
         detail = "ME_POSITION_ERROR"
@@ -1590,7 +1850,7 @@ def classify_failure(result: SweepResult) -> tuple[str, str, str]:
         detail = re_failure_detail(result)
     elif result.failure_reason == "HE":
         detail = "TO_HOME"
-        stage = "home"
+        stage = "home" if failed.timeout_diag is None else failed.timeout_diag.phase
     else:
         detail = "UNKNOWN"
     return detail, stage, ";".join(evidence_parts)
@@ -1598,12 +1858,16 @@ def classify_failure(result: SweepResult) -> tuple[str, str, str]:
 
 def timeout_failure_detail(result: SweepResult) -> str:
     sg = result.sg
+    failed = first_failed_test(result.test1, result.test2)
+    if failed.timeout_diag is not None and ":homing" in failed.timeout_diag.phase:
+        return "TO_HOME"
     if sg.timeout_remaining_steps == 0:
         return "TO_COMPLETION_DETECTION_MISMATCH"
     if sg.timeout_current_position is not None and sg.timeout_target_position is not None:
         if abs(sg.timeout_current_position - sg.timeout_target_position) <= 0.5:
             return "TO_COMPLETION_DETECTION_MISMATCH"
-    failed = first_failed_test(result.test1, result.test2)
+    if failed.timeout_diag is not None and ":return:" in failed.timeout_diag.phase:
+        return "TO_RETURN"
     if failed.name == "test1":
         return "TO_FORWARD"
     if failed.name == "test2":
@@ -1633,6 +1897,8 @@ def limit_expected_state(result: SweepResult) -> str:
 
 
 def limit_failure_detail(result: SweepResult) -> str:
+    if result.failure_reason == "SETUP_TO":
+        return "NA"
     sg = result.sg
     if sg.limit_transition_count is not None and sg.limit_transition_count > 3:
         return "LIMIT_BOUNCE"
@@ -1676,8 +1942,11 @@ def result_motion_error_detail(result: SweepResult) -> dict[str, float] | None:
 
 
 def timeout_expected_duration_ms_text(result: SweepResult) -> str:
+    failed = first_failed_test(result.test1, result.test2)
+    if failed.timeout_diag is not None and ":setup:" in failed.timeout_diag.phase:
+        return "NA"
     p = result.param
-    distance = 50.0 if first_failed_test(result.test1, result.test2).name == "test2" else 10.0
+    distance = 50.0 if failed.name == "test2" else 10.0
     if p.speed_mm_s <= 0:
         return "NA"
     return f"{distance / p.speed_mm_s * 1000.0:.0f}"
@@ -1701,7 +1970,14 @@ def sg_diagnostic(result: SweepResult) -> dict[str, str]:
         health = "SG_UNKNOWN"
     else:
         health = "SG_WARN"
-    comment = "SG is diagnostic only; it does not affect PASS/FAIL"
+    if result.failure_reason == "SETUP_TO":
+        diag = first_failed_test(result.test1, result.test2).timeout_diag
+        if diag is not None and diag.firmware_responsive:
+            comment = "Setup timeout with firmware responsive; likely expected response mismatch or serial log loss, not firmware halt"
+        else:
+            comment = "Setup timeout before motion; inspect command response and serial log tail"
+    else:
+        comment = "SG is diagnostic only; it does not affect PASS/FAIL"
     return {"health": health, "tags": ";".join(tags) if tags else "NONE", "comment": comment}
 
 
@@ -1907,26 +2183,35 @@ def failure_diagnostics_report(results: list[SweepResult]) -> list[str]:
     lines.extend(count_table(results, lambda item: classify_failure(item)[0], "failure_detail"))
 
     lines.append("")
-    lines.append("### TO Rows")
+    lines.append("### Timeout Rows")
     lines.append("")
     lines.extend(markdown_table(
-        ["condition", "stage", "detail", "timeout_pos", "target", "remaining", "elapsed_ms", "motion_state", "limit"],
+        ["condition", "phase", "command", "detail", "elapsed_ms", "firmware", "diag", "status", "mt", "timeout_pos", "target", "remaining", "limit"],
         [
             [
                 item.param.test_condition_id,
-                classify_failure(item)[1],
+                timeout_diag_text(item, "phase"),
+                timeout_diag_text(item, "command"),
                 classify_failure(item)[0],
+                timeout_diag_text(item, "elapsed_ms") if timeout_diag_text(item, "elapsed_ms") != "NA" else f"{item.elapsed_sec * 1000.0:.0f}",
+                timeout_diag_text(item, "firmware"),
+                timeout_diag_text(item, "diag"),
+                timeout_diag_text(item, "status"),
+                timeout_diag_text(item, "mt"),
                 "NA" if item.sg.timeout_current_position is None else f"{item.sg.timeout_current_position:.4f}",
                 "NA" if item.sg.timeout_target_position is None else f"{item.sg.timeout_target_position:.4f}",
                 value_or_na(item.sg.timeout_remaining_steps),
-                f"{item.elapsed_sec * 1000.0:.0f}",
-                value_or_na(item.sg.motion_state_before_re),
                 value_or_na(item.sg.timeout_limit_state),
             ]
             for item in results
-            if item.failure_reason == "TO"
+            if is_timeout_reason(item.failure_reason)
         ],
     ))
+
+    timeout_details = timeout_detail_report(results)
+    if timeout_details:
+        lines.append("")
+        lines.extend(timeout_details)
 
     lines.append("")
     lines.append("### ME Rows")
@@ -2011,6 +2296,83 @@ def failure_diagnostics_report(results: list[SweepResult]) -> list[str]:
     lines.extend(markdown_table(["condition", "case", "diagnostic_tags", "failure_reason"], rows))
     lines.append("")
     lines.append("SG diagnostics are not used to determine PASS/FAIL.")
+    return lines
+
+
+def timeout_diag_for(result: SweepResult) -> TimeoutDiagnostic | None:
+    if not is_timeout_reason(result.failure_reason):
+        return None
+    return first_failed_test(result.test1, result.test2).timeout_diag
+
+
+def timeout_diag_text(result: SweepResult, field: str) -> str:
+    diag = timeout_diag_for(result)
+    if diag is None:
+        return "NA"
+    if field == "phase":
+        return diag.phase
+    if field == "command":
+        return diag.command
+    if field == "elapsed_ms":
+        return str(diag.elapsed_ms)
+    if field == "firmware":
+        return "yes" if diag.firmware_responsive else "no"
+    if field == "diag":
+        return diag.diag_code
+    if field == "status":
+        return diag.status_code
+    if field == "mt":
+        return diag.mt_code
+    return "NA"
+
+
+def timeout_detail_report(results: list[SweepResult]) -> list[str]:
+    timeout_results = [item for item in results if timeout_diag_for(item) is not None]
+    if not timeout_results:
+        return []
+    lines = ["### TO Diagnostic Logs", ""]
+    for item in timeout_results:
+        diag = timeout_diag_for(item)
+        if diag is None:
+            continue
+        lines.append(f"#### {item.param.test_condition_id} {diag.phase}")
+        lines.append("")
+        lines.extend(markdown_table(
+            ["Item", "Value"],
+            [
+                ["command", diag.command],
+                ["elapsed_ms", str(diag.elapsed_ms)],
+                ["firmware_responsive", "yes" if diag.firmware_responsive else "no"],
+                ["diag_probe", diag.diag_code],
+                ["s_probe", diag.status_code],
+                ["mt_probe", diag.mt_code],
+            ],
+        ))
+        lines.append("")
+        lines.append("Serial tail before TO:")
+        lines.append("")
+        lines.append("```text")
+        lines.extend(diag.serial_tail or ["NA"])
+        lines.append("```")
+        lines.append("")
+        lines.append("`diag` probe response:")
+        lines.append("")
+        lines.append("```text")
+        lines.extend(diag.diag_lines or ["NA"])
+        lines.append("```")
+        lines.append("")
+        lines.append("`s` probe response:")
+        lines.append("")
+        lines.append("```text")
+        lines.extend(diag.status_lines or ["NA"])
+        lines.append("```")
+        lines.append("")
+        lines.append("`mt` probe response:")
+        lines.append("")
+        lines.append("```text")
+        lines.extend(diag.mt_lines or ["NA"])
+        lines.append("```")
+        lines.append("")
     return lines
 
 

@@ -13,6 +13,9 @@ constexpr int PIN_STEP = 5;
 constexpr int PIN_DIR = 6;
 constexpr int PIN_EN = -1;
 constexpr int PIN_LIMIT_X_MIN = 8;
+constexpr bool HEARTBEAT_ENABLED = true;
+constexpr int PIN_HEARTBEAT = 7;
+constexpr uint32_t HEARTBEAT_TOGGLE_INTERVAL_MS = 10;
 constexpr bool DIR_INVERTED = true;
 
 constexpr uint8_t TMC_UART_RX_PIN = 2;
@@ -58,7 +61,7 @@ constexpr float X_MAX_MM = X_MIN_MM + X_MAX_TRAVEL_MM;
 constexpr int HOMING_DIRECTION = -1;
 constexpr float HOMING_FAST_MM_S = 10.0F;
 constexpr float HOMING_SLOW_MM_S = 1.0F;
-constexpr float HOMING_BACKOFF_MM = 2.0F;
+constexpr float HOMING_BACKOFF_MM = 8.0F;
 constexpr float HOMING_MAX_TRAVEL_MM = 80.0F;
 
 constexpr float DEFAULT_MOVE_SPEED_MM_S = 10.0F;

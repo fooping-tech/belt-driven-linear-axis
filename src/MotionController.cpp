@@ -7,6 +7,7 @@ MotionController::MotionController(Axis& axis, float speedMmS) : axis_(axis), sp
 bool MotionController::moveToMm(float targetMm) {
   if (!axis_.isHomed() || !axis_.isWithinSoftLimit(targetMm)) {
     state_ = State::Error;
+    setNoStepReason(NoStepReason::MoveRejected);
     return false;
   }
 
@@ -14,6 +15,7 @@ bool MotionController::moveToMm(float targetMm) {
   const long delta = targetSteps_ - axis_.currentPositionSteps();
   if (delta == 0) {
     state_ = State::Idle;
+    setNoStepReason(NoStepReason::TargetReached);
     return true;
   }
 
@@ -21,6 +23,8 @@ bool MotionController::moveToMm(float targetMm) {
   lastStepUs_ = micros();
   lastSpeedUpdateUs_ = lastStepUs_;
   currentSpeedStepsS_ = 0.0F;
+  currentStepIntervalUs_ = 0;
+  setNoStepReason(NoStepReason::None);
   state_ = State::Moving;
   return true;
 }
@@ -41,6 +45,7 @@ bool MotionController::moveRelativeMm(float deltaMm, float speedMmS) {
 
 void MotionController::update() {
   if (state_ != State::Moving) {
+    setNoStepReason(state_ == State::Error ? NoStepReason::ErrorState : NoStepReason::NotMoving);
     return;
   }
 
@@ -57,6 +62,7 @@ void MotionController::update() {
 
   if (axis_.currentPositionSteps() == targetSteps_) {
     state_ = State::Idle;
+    setNoStepReason(NoStepReason::TargetReached);
     return;
   }
 
@@ -67,16 +73,20 @@ void MotionController::update() {
 
   if (!axis_.moveOneStep(direction_)) {
     state_ = State::Error;
+    setNoStepReason(NoStepReason::MoveRejected);
     return;
   }
 
+  setNoStepReason(NoStepReason::None);
   if (axis_.currentPositionSteps() == targetSteps_) {
     state_ = State::Idle;
+    setNoStepReason(NoStepReason::TargetReached);
   }
 }
 
 void MotionController::stop() {
   state_ = State::Idle;
+  setNoStepReason(NoStepReason::NotMoving);
 }
 
 void MotionController::resetTimingStats() {
@@ -146,6 +156,38 @@ float MotionController::speedMmS() const {
   return speedMmS_;
 }
 
+float MotionController::currentSpeedStepsS() const {
+  return currentSpeedStepsS_;
+}
+
+uint32_t MotionController::currentStepIntervalUs() const {
+  return currentStepIntervalUs_;
+}
+
+uint32_t MotionController::lastStepUs() const {
+  return lastStepUs_;
+}
+
+const char* MotionController::lastNoStepReasonName() const {
+  switch (lastNoStepReason_) {
+    case NoStepReason::None:
+      return "NONE";
+    case NoStepReason::NotMoving:
+      return "NOT_MOVING";
+    case NoStepReason::TargetReached:
+      return "TARGET_REACHED";
+    case NoStepReason::StepDueWait:
+      return "STEP_DUE_WAIT";
+    case NoStepReason::InvalidSpeed:
+      return "INVALID_SPEED";
+    case NoStepReason::MoveRejected:
+      return "MOVE_REJECTED";
+    case NoStepReason::ErrorState:
+      return "ERROR_STATE";
+  }
+  return "UNKNOWN";
+}
+
 void MotionController::setAccelerationMmS2(float accelerationMmS2) {
   accelerationMmS2_ = accelerationMmS2;
 }
@@ -182,6 +224,7 @@ void MotionController::updateProfileSpeed() {
   const float accelerationStepsS2 = accelerationMmS2_ * axis_.stepsPerMm();
   if (targetStepsPerSecond <= 0.0F || accelerationStepsS2 <= 0.0F) {
     state_ = State::Error;
+    setNoStepReason(NoStepReason::InvalidSpeed);
     return;
   }
 
@@ -212,15 +255,23 @@ void MotionController::updateProfileSpeed() {
 bool MotionController::stepDue(float stepsPerSecond) {
   if (stepsPerSecond <= 0.0F) {
     state_ = State::Error;
+    currentStepIntervalUs_ = 0;
+    setNoStepReason(NoStepReason::InvalidSpeed);
     return false;
   }
 
   const uint32_t intervalUs = static_cast<uint32_t>(1000000.0F / stepsPerSecond);
+  currentStepIntervalUs_ = intervalUs;
   const uint32_t nowUs = micros();
   if (nowUs - lastStepUs_ < intervalUs) {
+    setNoStepReason(NoStepReason::StepDueWait);
     return false;
   }
 
   lastStepUs_ = nowUs;
   return true;
+}
+
+void MotionController::setNoStepReason(NoStepReason reason) {
+  lastNoStepReason_ = reason;
 }

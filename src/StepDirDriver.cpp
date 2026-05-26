@@ -34,6 +34,8 @@ void StepDirDriver::setDirection(bool positive) {
 }
 
 void StepDirDriver::stepPulse() {
+  ++stepPulseCount_;
+  lastStepPulseUs_ = micros();
   digitalWrite(stepPin_, HIGH);
   delayMicroseconds(pulseWidthUs_);
   digitalWrite(stepPin_, LOW);
@@ -41,4 +43,12 @@ void StepDirDriver::stepPulse() {
 
 bool StepDirDriver::isEnabled() const {
   return enabled_;
+}
+
+uint32_t StepDirDriver::stepPulseCount() const {
+  return stepPulseCount_;
+}
+
+uint32_t StepDirDriver::lastStepPulseUs() const {
+  return lastStepPulseUs_;
 }

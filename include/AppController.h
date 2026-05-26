@@ -43,6 +43,10 @@ class AppController {
   void printMotionTimingSummary();
   void printRejectDetail(const char* stage, const char* reason);
   void printCurrentStatusCsv(const char* driverStatus);
+  void updateHeartbeatAndLoopStats();
+  void printLoopDiagnostics() const;
+  void printResetReason() const;
+  const char* resetReasonName() const;
   bool validateTmcUartForMove(char* failReason, size_t failReasonSize);
   bool setStallGuardThreshold(uint16_t sgthrs);
   bool setStallGuardTcoolThreshold(uint32_t tcoolthrs);
@@ -60,6 +64,7 @@ class AppController {
   void printMoveUsage() const;
   void updateState();
   void printStatus();
+  void printDiagnosticStatus();
   void drawStatus();
   const char* stateName() const;
 
@@ -74,6 +79,12 @@ class AppController {
   bool wasPressed_ = false;
   uint32_t pressStartedMs_ = 0;
   uint32_t lastDisplayMs_ = 0;
+  uint32_t lastLoopTickUs_ = 0;
+  uint32_t lastLoopGapUs_ = 0;
+  uint32_t maxLoopGapUs_ = 0;
+  uint32_t lastHeartbeatToggleMs_ = 0;
+  bool heartbeatState_ = false;
+  int resetReason_ = 0;
   HomingController::State lastHomingLogState_ = HomingController::State::Idle;
   String serialLine_;
 };

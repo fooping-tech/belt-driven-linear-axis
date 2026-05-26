@@ -65,6 +65,7 @@ bool Axis::moveOneStep(int direction) {
   if (!canMoveOneStep(direction, true, false)) {
     return false;
   }
+  setMoveRejectReason(MoveRejectReason::None);
   applyStep(direction);
   return true;
 }
@@ -88,27 +89,40 @@ bool Axis::moveOneStepForHoming(int direction) {
   if (!canMoveOneStep(direction, false, true)) {
     return false;
   }
+  setMoveRejectReason(MoveRejectReason::None);
   applyStep(direction);
   return true;
 }
 
 bool Axis::canMoveOneStep(int direction, bool requireHomed, bool ignoreLimit) {
   const int normalizedDirection = direction >= 0 ? 1 : -1;
+  if (!driver_.isEnabled()) {
+    setMoveRejectReason(MoveRejectReason::DriverDisabled);
+    return false;
+  }
   if (requireHomed && !homed_) {
+    setMoveRejectReason(MoveRejectReason::Unknown);
     return false;
   }
 
   if (!ignoreLimit && normalizedDirection == minLimitDirection_ && isLimitPressed()) {
+    setMoveRejectReason(MoveRejectReason::LimitPressed);
     return false;
   }
 
   if (requireHomed && softLimitsEnabled_) {
     const float nextMm = static_cast<float>(currentPositionSteps_ + normalizedDirection) / stepsPerMm_;
-    if (!isWithinSoftLimit(nextMm)) {
+    if (nextMm < minMm_) {
+      setMoveRejectReason(MoveRejectReason::SoftLimitMin);
+      return false;
+    }
+    if (nextMm > maxMm_) {
+      setMoveRejectReason(MoveRejectReason::SoftLimitMax);
       return false;
     }
   }
 
+  setMoveRejectReason(MoveRejectReason::None);
   return true;
 }
 
@@ -117,4 +131,26 @@ void Axis::applyStep(int direction) {
   driver_.setDirection(normalizedDirection > 0);
   driver_.stepPulse();
   currentPositionSteps_ += normalizedDirection;
+}
+
+void Axis::setMoveRejectReason(MoveRejectReason reason) {
+  lastMoveRejectReason_ = reason;
+}
+
+const char* Axis::lastMoveRejectReasonName() const {
+  switch (lastMoveRejectReason_) {
+    case MoveRejectReason::None:
+      return "NONE";
+    case MoveRejectReason::LimitPressed:
+      return "LIMIT_PRESSED";
+    case MoveRejectReason::SoftLimitMin:
+      return "SOFT_LIMIT_MIN";
+    case MoveRejectReason::SoftLimitMax:
+      return "SOFT_LIMIT_MAX";
+    case MoveRejectReason::DriverDisabled:
+      return "DRIVER_DISABLED";
+    case MoveRejectReason::Unknown:
+      return "UNKNOWN";
+  }
+  return "UNKNOWN";
 }

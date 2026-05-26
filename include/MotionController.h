@@ -38,6 +38,10 @@ class MotionController {
   long targetSteps() const;
   long remainingSteps() const;
   float speedMmS() const;
+  float currentSpeedStepsS() const;
+  uint32_t currentStepIntervalUs() const;
+  uint32_t lastStepUs() const;
+  const char* lastNoStepReasonName() const;
   void setAccelerationMmS2(float accelerationMmS2);
   float accelerationMmS2() const;
   void setProfile(Profile profile);
@@ -45,8 +49,19 @@ class MotionController {
   const char* profileName() const;
 
  private:
+  enum class NoStepReason : uint8_t {
+    None,
+    NotMoving,
+    TargetReached,
+    StepDueWait,
+    InvalidSpeed,
+    MoveRejected,
+    ErrorState,
+  };
+
   void updateProfileSpeed();
   bool stepDue(float stepsPerSecond);
+  void setNoStepReason(NoStepReason reason);
 
   Axis& axis_;
   float speedMmS_;
@@ -62,4 +77,6 @@ class MotionController {
   uint32_t timingMaxUpdateGapUs_ = 0;
   uint64_t timingSumUpdateGapUs_ = 0;
   uint32_t timingLastUpdateUs_ = 0;
+  uint32_t currentStepIntervalUs_ = 0;
+  NoStepReason lastNoStepReason_ = NoStepReason::NotMoving;
 };

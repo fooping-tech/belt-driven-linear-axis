@@ -11,6 +11,8 @@ class StepDirDriver {
   void setDirection(bool positive);
   void stepPulse();
   bool isEnabled() const;
+  uint32_t stepPulseCount() const;
+  uint32_t lastStepPulseUs() const;
 
  private:
   int stepPin_;
@@ -19,4 +21,6 @@ class StepDirDriver {
   uint32_t pulseWidthUs_;
   bool invertDirection_;
   bool enabled_ = false;
+  uint32_t stepPulseCount_ = 0;
+  uint32_t lastStepPulseUs_ = 0;
 };

@@ -35,11 +35,27 @@ class HomingController {
   void reset();
   State state() const;
   const char* stateName() const;
+  const char* lastNoStepReasonName() const;
 
  private:
+  enum class NoStepReason : uint8_t {
+    Idle,
+    Done,
+    Error,
+    LimitPressedSeekFastToBackoff,
+    BackoffLimitReleased,
+    StepDueWait,
+    MoveRejected,
+    BackoffLimitStillOn,
+    SeekFastMaxTravel,
+    SeekSlowMaxTravel,
+    None,
+  };
+
   bool stepDue(float speedMmS);
   void markError();
   long mmToSteps(float mm) const;
+  void setNoStepReason(NoStepReason reason);
 
   Axis& axis_;
   HomingConfig config_;
@@ -47,5 +63,5 @@ class HomingController {
   uint32_t lastStepUs_ = 0;
   long travelSteps_ = 0;
   long backoffSteps_ = 0;
+  NoStepReason lastNoStepReason_ = NoStepReason::Idle;
 };
-

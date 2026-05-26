@@ -25,10 +25,21 @@ class Axis {
   bool moveSteps(long steps, int direction);
   bool moveRelativeMm(float mm);
   bool moveOneStepForHoming(int direction);
+  const char* lastMoveRejectReasonName() const;
 
  private:
+  enum class MoveRejectReason : uint8_t {
+    None,
+    LimitPressed,
+    SoftLimitMin,
+    SoftLimitMax,
+    DriverDisabled,
+    Unknown,
+  };
+
   bool canMoveOneStep(int direction, bool requireHomed, bool ignoreLimit);
   void applyStep(int direction);
+  void setMoveRejectReason(MoveRejectReason reason);
 
   StepDirDriver& driver_;
   LimitSwitch* minLimit_;
@@ -39,4 +50,5 @@ class Axis {
   float maxMm_ = 0.0F;
   bool softLimitsEnabled_ = false;
   bool homed_ = false;
+  MoveRejectReason lastMoveRejectReason_ = MoveRejectReason::None;
 };

@@ -84,6 +84,15 @@ ATOM S3 GPIO8 ---- リミットスイッチ ---- GND
 入力は active-low + `INPUT_PULLUP` です。
 スイッチが押されると GPIO が LOW になり、`LimitSwitch` が 30 ms デバウンスして ON と判定します。
 
+## ハートビートGPIO
+
+`include/config.h` の `HEARTBEAT_ENABLED = true` のとき、`GPIO7` をメインループのハートビートとして約10ms周期でトグルします。
+TO発生時にGPIO7が止まる場合はESP32メインループ停止、リセット、電源、Watchdog、USB CDC側を疑います。
+GPIO7が動き続ける場合はSerial応答待ち、状態機械、MotionController、TMC2209、機械側を優先して切り分けます。
+
+起動時には `esp_reset_reason()` の結果を `reset_reason=POWERON` のようにSerialへ出します。
+`s` と `mt` には `heartbeat_enabled`、`heartbeat_pin`、`last_loop_gap_us`、`max_loop_gap_us`、`reset_reason` を追加で出します。
+
 ## 状態遷移
 
 App:
@@ -168,6 +177,7 @@ Serial コマンド:
 | `5` | +50 mm 移動 |
 | `b` | -10 mm 移動 |
 | `s` | status 表示 |
+| `diag` | 軽量診断。TMC UARTとDisplayに触らず、状態、STEP、停止理由だけを短く表示 |
 | `off` | モータ通電OFF。TMC2209は `toff(0)` で出力段を無効化 |
 | `on` | モータ通電ON。TMC2209設定を再適用 |
 | `v <mm/s>` | 通常移動の既定速度を変更。`speed <mm/s>` も使用可能 |
@@ -281,6 +291,21 @@ python3 tools/step_loss_sweep.py --csv tools/step_loss_params.csv --port auto
   test2 => PASS score=98.0 reason=OK limit=ON timing=DURING_MOVE error=0.0100mm remainingSteps=1
   => PASS score=98.0 reason=OK limit=ON timing=DURING_MOVE error=0.0100mm remainingSteps=1 tests=PASS/PASS
 ```
+
+timeout時は、止まったフェーズ、コマンド、TO後の `s` / `mt` probe結果も表示します。
+
+```text
+  test2 => FAIL score=0.0 reason=TO limit=UNKNOWN timing=UNKNOWN error=- remainingSteps=- phase=test2:return:b:2 command=b elapsed_ms=30000 firmware=yes status=OK mt=OK
+```
+
+Serialログが一定時間途切れた場合は、軽量な `diag` probeを送ってSTEP停止理由を残します。
+
+```text
+[probe] phase=test2:return:b:2 command=b no_serial_for=1000ms
+DIAG,app_state=Moving,homing_state=Idle,motion_state=Moving,current_position_steps=1200,target_steps=0,remaining_steps=1200,limit_raw=OFF,limit_debounced=OFF,motion_current_speed_steps_s=2400.00,motion_step_interval_us=416,motion_last_step_us=123456789,now_us=123457000,last_step_pulse_us=123456789,step_pulse_count=3456,last_no_step_reason=STEP_DUE_WAIT,motion_no_step_reason=STEP_DUE_WAIT,homing_no_step_reason=IDLE,last_move_reject_reason=NONE,heartbeat_enabled=1,max_loop_gap_us=850,max_motion_update_gap_us=620
+```
+
+Markdownレポートの `TO Diagnostic Logs` には、TO直前のSerialログ末尾、`diag` / `s` / `mt` probe応答がTO時だけ出ます。
 
 実機接続で `pyserial` が見つからない場合は、先に次を実行してください。
 
