@@ -16,6 +16,11 @@ constexpr int PIN_LIMIT_X_MIN = 8;
 constexpr bool HEARTBEAT_ENABLED = true;
 constexpr int PIN_HEARTBEAT = 7;
 constexpr uint32_t HEARTBEAT_TOGGLE_INTERVAL_MS = 10;
+constexpr bool STARTUP_MOTOR_MELODY_ENABLED = true;
+constexpr uint16_t STARTUP_MOTOR_MELODY_MICROSTEPS = 2;
+constexpr bool STARTUP_MOTOR_MELODY_SPREADCYCLE = true;
+constexpr uint16_t STARTUP_MOTOR_MELODY_CURRENT_MA = 1200;
+constexpr uint16_t STARTUP_MOTOR_MELODY_NOTE_GAP_MS = 25;
 constexpr bool DIR_INVERTED = true;
 
 constexpr uint8_t TMC_UART_RX_PIN = 2;

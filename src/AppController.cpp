@@ -34,6 +34,18 @@ uint32_t limitTransitionCount = 0;
 bool lastMoveLimitState = false;
 bool moveLimitStateInitialized = false;
 
+struct MotorMelodyNote {
+  uint16_t frequencyHz;
+  uint16_t durationMs;
+};
+
+constexpr MotorMelodyNote kStartupMotorMelody[] = {
+    {523, 90},
+    {659, 90},
+    {784, 120},
+    {1047, 180},
+};
+
 #if ACTIVE_DRIVER == DRIVER_TMC2209
 HardwareSerial TmcSerial(1);
 TMC2209Stepper TmcDriver(&TmcSerial, TMC_R_SENSE, TMC_DRIVER_ADDRESS);
@@ -186,6 +198,7 @@ void AppController::begin() {
   refreshTmcUartStatus();
   printTmc2209CurrentStatus("after step driver enable");
 #endif
+  playStartupMotorMelody();
 
   M5.Display.setRotation(0);
   state_ = State::NotHomed;
@@ -270,6 +283,55 @@ const char* AppController::resetReasonName() const {
     default:
       return "UNKNOWN";
   }
+}
+
+void AppController::playStartupMotorMelody() {
+  if (!STARTUP_MOTOR_MELODY_ENABLED || !driver_.isEnabled()) {
+    return;
+  }
+
+#if ACTIVE_DRIVER == DRIVER_TMC2209
+  const uint16_t restoreMicrosteps = runtimeMicrosteps;
+  const bool restoreSpreadCycle = tmcSpreadCycle;
+  const uint16_t restoreCurrentMa = tmcRuntimeRmsCurrentMa;
+  tmcRuntimeRmsCurrentMa = STARTUP_MOTOR_MELODY_CURRENT_MA;
+  applyTmc2209Current(TmcDriver);
+  TmcDriver.microsteps(STARTUP_MOTOR_MELODY_MICROSTEPS);
+  TmcDriver.en_spreadCycle(STARTUP_MOTOR_MELODY_SPREADCYCLE);
+  refreshTmcUartStatus();
+#endif
+
+  Serial.printf("startup_motor_melody=on microsteps=1/%u chop=%s current_ma=%u\n",
+                STARTUP_MOTOR_MELODY_MICROSTEPS,
+                STARTUP_MOTOR_MELODY_SPREADCYCLE ? "spreadCycle" : "stealthChop",
+                STARTUP_MOTOR_MELODY_CURRENT_MA);
+  bool directionPositive = HOMING_DIRECTION < 0;
+  for (const MotorMelodyNote& note : kStartupMotorMelody) {
+    if (note.frequencyHz == 0) {
+      delay(note.durationMs);
+      continue;
+    }
+
+    const uint32_t periodUs = 1000000UL / note.frequencyHz;
+    const uint32_t startedMs = millis();
+    while (millis() - startedMs < note.durationMs) {
+      driver_.setDirection(directionPositive);
+      delayMicroseconds(2);
+      driver_.stepPulse();
+      directionPositive = !directionPositive;
+      delayMicroseconds(periodUs);
+    }
+    delay(STARTUP_MOTOR_MELODY_NOTE_GAP_MS);
+  }
+
+#if ACTIVE_DRIVER == DRIVER_TMC2209
+  tmcRuntimeRmsCurrentMa = restoreCurrentMa;
+  applyTmc2209Current(TmcDriver);
+  TmcDriver.microsteps(restoreMicrosteps);
+  TmcDriver.en_spreadCycle(restoreSpreadCycle);
+  refreshTmcUartStatus();
+#endif
+  Serial.println("startup_motor_melody=done");
 }
 
 void AppController::handleButton() {

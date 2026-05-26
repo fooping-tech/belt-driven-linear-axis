@@ -47,6 +47,7 @@ class AppController {
   void printLoopDiagnostics() const;
   void printResetReason() const;
   const char* resetReasonName() const;
+  void playStartupMotorMelody();
   bool validateTmcUartForMove(char* failReason, size_t failReasonSize);
   bool setStallGuardThreshold(uint16_t sgthrs);
   bool setStallGuardTcoolThreshold(uint32_t tcoolthrs);

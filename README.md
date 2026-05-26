@@ -93,6 +93,14 @@ GPIO7が動き続ける場合はSerial応答待ち、状態機械、MotionContro
 起動時には `esp_reset_reason()` の結果を `reset_reason=POWERON` のようにSerialへ出します。
 `s` と `mt` には `heartbeat_enabled`、`heartbeat_pin`、`last_loop_gap_us`、`max_loop_gap_us`、`reset_reason` を追加で出します。
 
+## 起動メロディ
+
+`include/config.h` の `STARTUP_MOTOR_MELODY_ENABLED = true` のとき、起動時にモータへ短い交互STEPパターンを出してメロディ風の音を鳴らします。
+モータ位置はホーミング前なので、論理位置には反映しません。
+TMC2209使用時は起動メロディ中だけ `STARTUP_MOTOR_MELODY_MICROSTEPS = 2`、`STARTUP_MOTOR_MELODY_SPREADCYCLE = true`、`STARTUP_MOTOR_MELODY_CURRENT_MA = 1200` を適用し、終了後に通常設定へ戻します。
+不要な場合は `STARTUP_MOTOR_MELODY_ENABLED = false` にしてください。
+音符間の間隔は `STARTUP_MOTOR_MELODY_NOTE_GAP_MS` で変更できます。
+
 ## 状態遷移
 
 App:
