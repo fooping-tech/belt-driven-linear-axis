@@ -71,7 +71,7 @@ constexpr float HOMING_MAX_TRAVEL_MM = 80.0F;
 
 constexpr float DEFAULT_MOVE_SPEED_MM_S = 10.0F;
 constexpr float TEST_MOVE_MIN_SPEED_MM_S = 0.1F;
-constexpr float TEST_MOVE_MAX_SPEED_MM_S = 200.0F;
+constexpr float TEST_MOVE_MAX_SPEED_MM_S = 500.0F;
 constexpr float DEFAULT_ACCELERATION_MM_S2 = 100.0F;
 constexpr float TEST_ACCEL_MIN_MM_S2 = 1.0F;
 constexpr float TEST_ACCEL_MAX_MM_S2 = 5000.0F;

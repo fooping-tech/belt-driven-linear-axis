@@ -1396,6 +1396,31 @@ void AppController::printMotionTimingSummary() {
                 resetReasonName());
 }
 
+void AppController::printMoveTiming(uint32_t targetReachedUs, uint32_t completePrintBeforeUs) const {
+  const long currentSteps = axis_.currentPositionSteps();
+  const long movedSteps = currentSteps - moveStartSteps_;
+  const float distanceMm = static_cast<float>(movedSteps) / axis_.stepsPerMm();
+  const uint32_t firmwareMotionElapsedUs = targetReachedUs - moveStartedUs_;
+  const uint32_t postMotionBeforeCompleteUs = completePrintBeforeUs - targetReachedUs;
+  Serial.printf("MOVE_TIMING,delta_mm=%.4f,start_steps=%ld,target_steps=%ld,moved_steps=%ld,distance_mm=%.4f,speed_mm_s=%.4f,accel_mm_s2=%.4f,profile=%s,started_us=%lu,target_reached_us=%lu,complete_print_us=%lu,complete_print_before_us=%lu,firmware_motion_elapsed_ms=%.3f,post_motion_before_complete_ms=%.3f,steps_per_mm=%.4f,microsteps=%u\n",
+                moveCommandDeltaMm_,
+                moveStartSteps_,
+                moveTargetSteps_,
+                movedSteps,
+                distanceMm,
+                moveCommandSpeedMmS_,
+                moveCommandAccelMmS2_,
+                motion_.profileName(),
+                static_cast<unsigned long>(moveStartedUs_),
+                static_cast<unsigned long>(targetReachedUs),
+                static_cast<unsigned long>(completePrintBeforeUs),
+                static_cast<unsigned long>(completePrintBeforeUs),
+                static_cast<double>(firmwareMotionElapsedUs) / 1000.0,
+                static_cast<double>(postMotionBeforeCompleteUs) / 1000.0,
+                axis_.stepsPerMm(),
+                runtimeMicrosteps);
+}
+
 void AppController::printRejectDetail(const char* stage, const char* reason) {
 #if ACTIVE_DRIVER == DRIVER_TMC2209
   const uint16_t currentBeforeRe = tmcRuntimeRmsCurrentMa;
@@ -1567,6 +1592,11 @@ void AppController::startMoveRelative(float mm, float speedMmS) {
     return;
   }
 
+  moveStartedUs_ = micros();
+  moveCommandDeltaMm_ = mm;
+  moveCommandSpeedMmS_ = speedMmS;
+  moveCommandAccelMmS2_ = motion_.accelerationMmS2();
+  moveStartSteps_ = axis_.currentPositionSteps();
   const float targetMm = axis_.currentPositionMm() + mm;
   if (!motion_.moveRelativeMm(mm, speedMmS)) {
     sgCaptureActive = false;
@@ -1574,6 +1604,7 @@ void AppController::startMoveRelative(float mm, float speedMmS) {
     Serial.println("Move rejected by motion controller");
     return;
   }
+  moveTargetSteps_ = motion_.targetSteps();
 
   sgCaptureActive = mm > 0.0F;
   sgCaptureStartedMs = millis();
@@ -1651,12 +1682,18 @@ void AppController::updateState() {
       }
       motion_.update();
       if (!motion_.isMoving() && !motion_.hasError()) {
+        const uint32_t targetReachedUs = micros();
         state_ = State::Ready;
         moveEndLimitState = limit_.isPressedDebounced() ? "ON" : "OFF";
         printMotionTimingSummary();
         printStallGuardSummary();
         sgCaptureActive = false;
+        const uint32_t completePrintBeforeUs = micros();
+        printMoveTiming(targetReachedUs, completePrintBeforeUs);
         Serial.println("Move complete");
+        Serial.printf("MOVE_COMPLETE_TIMING,complete_print_before_us=%lu,complete_print_after_us=%lu\n",
+                      static_cast<unsigned long>(completePrintBeforeUs),
+                      static_cast<unsigned long>(micros()));
         printStatus();
       } else if (motion_.hasError()) {
         state_ = State::Error;

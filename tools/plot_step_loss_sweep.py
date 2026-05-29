@@ -28,6 +28,14 @@ FIGURE_NAMES = {
     "max_speed_current": "04_max_stable_speed_by_current",
     "max_speed_accel": "05_max_stable_speed_by_accel",
     "error_speed": "06_error_vs_speed_by_current",
+    "velocity_elapsed": "07_velocity_elapsed_by_speed",
+    "elapsed_variability": "08_elapsed_variability_by_speed",
+    "elapsed_histogram": "09_elapsed_histogram",
+    "pc_wait_elapsed": "10_pc_wait_elapsed_by_speed",
+    "firmware_motion_elapsed": "11_firmware_motion_elapsed_by_speed",
+    "expected_ideal_elapsed": "12_expected_ideal_by_speed",
+    "update_gap_elapsed_error": "13_update_gap_vs_elapsed_error",
+    "sg_elapsed_comparison": "14_sg_elapsed_comparison",
 }
 
 
@@ -44,9 +52,11 @@ def main() -> int:
     classified_df = classify_by_error(raw_df, args.ok_error_threshold, args.ng_error_threshold)
     df = aggregate_duplicate_conditions(classified_df)
     df = calculate_margin_score(df)
+    variability_df = summarize_variability(classified_df)
 
     raw_out = out_dir / "raw_results.csv"
     classified_df.to_csv(raw_out, index=False)
+    variability_df.to_csv(out_dir / "variability_stats.csv", index=False)
 
     figure_paths = {
         "overview": figures_dir / f"{FIGURE_NAMES['overview']}.{args.format}",
@@ -55,6 +65,14 @@ def main() -> int:
         "max_speed_current": figures_dir / f"{FIGURE_NAMES['max_speed_current']}.{args.format}",
         "max_speed_accel": figures_dir / f"{FIGURE_NAMES['max_speed_accel']}.{args.format}",
         "error_speed": figures_dir / f"{FIGURE_NAMES['error_speed']}.{args.format}",
+        "velocity_elapsed": figures_dir / f"{FIGURE_NAMES['velocity_elapsed']}.{args.format}",
+        "elapsed_variability": figures_dir / f"{FIGURE_NAMES['elapsed_variability']}.{args.format}",
+        "elapsed_histogram": figures_dir / f"{FIGURE_NAMES['elapsed_histogram']}.{args.format}",
+        "pc_wait_elapsed": figures_dir / f"{FIGURE_NAMES['pc_wait_elapsed']}.{args.format}",
+        "firmware_motion_elapsed": figures_dir / f"{FIGURE_NAMES['firmware_motion_elapsed']}.{args.format}",
+        "expected_ideal_elapsed": figures_dir / f"{FIGURE_NAMES['expected_ideal_elapsed']}.{args.format}",
+        "update_gap_elapsed_error": figures_dir / f"{FIGURE_NAMES['update_gap_elapsed_error']}.{args.format}",
+        "sg_elapsed_comparison": figures_dir / f"{FIGURE_NAMES['sg_elapsed_comparison']}.{args.format}",
     }
 
     plot_overview_scatter(df, str(figure_paths["overview"]), args.title)
@@ -69,6 +87,14 @@ def main() -> int:
     max_by_current = plot_max_speed_by_current(df, str(figure_paths["max_speed_current"]), args.title)
     max_by_accel = plot_max_speed_by_accel(df, str(figure_paths["max_speed_accel"]), args.title)
     plot_error_vs_speed_by_current(df, str(figure_paths["error_speed"]), args.title)
+    velocity_elapsed_generated = plot_velocity_elapsed_by_speed(classified_df, str(figure_paths["velocity_elapsed"]), args.title)
+    elapsed_variability_generated = plot_elapsed_variability_by_speed(variability_df, str(figure_paths["elapsed_variability"]), args.title)
+    elapsed_histogram_generated = plot_elapsed_histogram(classified_df, str(figure_paths["elapsed_histogram"]), args.title)
+    pc_wait_elapsed_generated = plot_metric_by_speed(classified_df, "test2_forward_pc_wait_elapsed_ms", str(figure_paths["pc_wait_elapsed"]), "PC Wait Elapsed vs Speed", "pc_wait_elapsed_ms", args.title)
+    firmware_motion_elapsed_generated = plot_metric_by_speed(classified_df, "test2_forward_firmware_motion_elapsed_ms", str(figure_paths["firmware_motion_elapsed"]), "Firmware Motion Elapsed vs Speed", "firmware_motion_elapsed_ms", args.title)
+    expected_ideal_elapsed_generated = plot_metric_by_speed(classified_df, "test2_expected_ideal_ms", str(figure_paths["expected_ideal_elapsed"]), "Expected Ideal Elapsed vs Speed", "expected_ideal_ms", args.title)
+    update_gap_elapsed_error_generated = plot_update_gap_vs_elapsed_error(classified_df, str(figure_paths["update_gap_elapsed_error"]), args.title)
+    sg_elapsed_comparison_generated = plot_sg_elapsed_comparison(classified_df, str(figure_paths["sg_elapsed_comparison"]), args.title)
 
     recommended_df = select_recommended_settings(df, args.min_margin_score)
     recommended_df.to_csv(out_dir / "safe_region_table.csv", index=False)
@@ -85,10 +111,20 @@ def main() -> int:
         figure_ext=args.format,
         max_by_current=max_by_current,
         max_by_accel=max_by_accel,
+        velocity_elapsed_generated=velocity_elapsed_generated,
+        variability_df=variability_df,
+        elapsed_variability_generated=elapsed_variability_generated,
+        elapsed_histogram_generated=elapsed_histogram_generated,
+        pc_wait_elapsed_generated=pc_wait_elapsed_generated,
+        firmware_motion_elapsed_generated=firmware_motion_elapsed_generated,
+        expected_ideal_elapsed_generated=expected_ideal_elapsed_generated,
+        update_gap_elapsed_error_generated=update_gap_elapsed_error_generated,
+        sg_elapsed_comparison_generated=sg_elapsed_comparison_generated,
     )
 
     print(f"Report: {out_dir / 'report.md'}")
     print(f"Raw results: {raw_out}")
+    print(f"Variability stats: {out_dir / 'variability_stats.csv'}")
     print(f"Recommended settings: {out_dir / 'safe_region_table.csv'}")
     return 0
 
@@ -220,6 +256,20 @@ def ensure_error_columns(df: pd.DataFrame) -> pd.DataFrame:
         df["error_mm"] = pd.to_numeric(df["error_mm"], errors="coerce")
     else:
         df["error_mm"] = np.nan
+    if "test2_forward_elapsed_ms" in df.columns:
+        df["test2_forward_elapsed_ms"] = pd.to_numeric(df["test2_forward_elapsed_ms"], errors="coerce")
+    for col in (
+        "test2_forward_pc_wait_elapsed_ms",
+        "test2_forward_firmware_motion_elapsed_ms",
+        "test2_expected_ideal_ms",
+        "test2_expected_firmware_model_ms",
+        "test2_elapsed_error_ms",
+        "test2_elapsed_error_ratio",
+        "max_update_gap_us",
+        "sg_enabled",
+    ):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
     return df
 
 
@@ -307,6 +357,50 @@ def aggregate_duplicate_conditions(df: pd.DataFrame) -> pd.DataFrame:
             row[col] = join_unique(group[col])
         grouped.append(row)
     return pd.DataFrame(grouped).sort_values(key_columns).reset_index(drop=True)
+
+
+def summarize_variability(df: pd.DataFrame) -> pd.DataFrame:
+    """同一条件のrepeat結果からelapsedと成功率のばらつきを集計する。"""
+    if "test2_forward_elapsed_ms" not in df.columns:
+        return pd.DataFrame()
+
+    key_columns = condition_key_columns(df)
+    working = df.copy()
+    working["test2_forward_elapsed_ms"] = pd.to_numeric(working["test2_forward_elapsed_ms"], errors="coerce")
+    working["pass_flag"] = working["final_result"].eq("OK")
+
+    grouped_rows: list[dict[str, object]] = []
+    for key, group in working.groupby(key_columns, dropna=False, sort=True):
+        key_values = key if isinstance(key, tuple) else (key,)
+        row: dict[str, object] = dict(zip(key_columns, key_values))
+        elapsed = group["test2_forward_elapsed_ms"].dropna()
+        total = len(group)
+        pass_count = int(group["pass_flag"].sum())
+        row.update({
+            "sample_count": total,
+            "pass_count": pass_count,
+            "fail_count": total - pass_count,
+            "success_rate": pass_count / total if total else np.nan,
+            "elapsed_mean_ms": elapsed.mean() if not elapsed.empty else np.nan,
+            "elapsed_std_ms": elapsed.std(ddof=1) if len(elapsed) > 1 else 0.0 if len(elapsed) == 1 else np.nan,
+            "elapsed_min_ms": elapsed.min() if not elapsed.empty else np.nan,
+            "elapsed_p05_ms": elapsed.quantile(0.05) if not elapsed.empty else np.nan,
+            "elapsed_median_ms": elapsed.median() if not elapsed.empty else np.nan,
+            "elapsed_p95_ms": elapsed.quantile(0.95) if not elapsed.empty else np.nan,
+            "elapsed_max_ms": elapsed.max() if not elapsed.empty else np.nan,
+        })
+        if not elapsed.empty:
+            row["elapsed_range_ms"] = row["elapsed_max_ms"] - row["elapsed_min_ms"]
+            mean = float(row["elapsed_mean_ms"])
+            row["elapsed_cv_pct"] = float(row["elapsed_std_ms"]) / mean * 100.0 if mean else np.nan
+        else:
+            row["elapsed_range_ms"] = np.nan
+            row["elapsed_cv_pct"] = np.nan
+        grouped_rows.append(row)
+
+    if not grouped_rows:
+        return pd.DataFrame()
+    return pd.DataFrame(grouped_rows).sort_values(key_columns).reset_index(drop=True)
 
 
 def condition_key_columns(df: pd.DataFrame) -> list[str]:
@@ -534,6 +628,223 @@ def plot_error_vs_speed_by_current(df: pd.DataFrame, out_path: str, title_prefix
     save_figure(fig, out_path)
 
 
+def plot_velocity_elapsed_by_speed(df: pd.DataFrame, out_path: str, title_prefix: str = "") -> bool:
+    """速度指示値に対するtest2の5mm移動完了時間を描く。"""
+    if "test2_forward_elapsed_ms" not in df.columns:
+        return False
+
+    plot_df = df[df["test2_forward_elapsed_ms"].notna()].copy()
+    if plot_df.empty:
+        return False
+
+    group_columns = ["current_ma", "accel_mm_s2"]
+    if "chop_mode" in plot_df.columns:
+        group_columns.append("chop_mode")
+    if "microsteps" in plot_df.columns:
+        group_columns.append("microsteps")
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    for key, group in plot_df.groupby(group_columns, dropna=False):
+        group = group.sort_values("speed_mm_s")
+        label = velocity_elapsed_label(group_columns, key)
+        ax.plot(group["speed_mm_s"], group["test2_forward_elapsed_ms"], marker="o", label=label)
+
+    ax.set_title(title("Commanded Speed vs test2 Forward Elapsed", title_prefix))
+    ax.set_xlabel("commanded speed_mm_s")
+    ax.set_ylabel("elapsed_ms for test2 command=5")
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=8)
+    save_figure(fig, out_path)
+    return True
+
+
+def plot_metric_by_speed(
+    df: pd.DataFrame,
+    metric: str,
+    out_path: str,
+    plot_title: str,
+    ylabel: str,
+    title_prefix: str = "",
+) -> bool:
+    if metric not in df.columns:
+        return False
+    plot_df = df[df[metric].notna()].copy()
+    if plot_df.empty:
+        return False
+
+    group_columns = ["current_ma", "accel_mm_s2"]
+    if "chop_mode" in plot_df.columns:
+        group_columns.append("chop_mode")
+    if "microsteps" in plot_df.columns:
+        group_columns.append("microsteps")
+    if "sg_enabled" in plot_df.columns and plot_df["sg_enabled"].nunique(dropna=True) > 1:
+        group_columns.append("sg_enabled")
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    for key, group in plot_df.groupby(group_columns, dropna=False):
+        group = group.sort_values("speed_mm_s")
+        label = velocity_elapsed_label(group_columns, key)
+        ax.plot(group["speed_mm_s"], group[metric], marker="o", label=label)
+
+    ax.set_title(title(plot_title, title_prefix))
+    ax.set_xlabel("speed_mm_s")
+    ax.set_ylabel(ylabel)
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=8)
+    save_figure(fig, out_path)
+    return True
+
+
+def plot_update_gap_vs_elapsed_error(df: pd.DataFrame, out_path: str, title_prefix: str = "") -> bool:
+    required = {"max_update_gap_us", "test2_elapsed_error_ms"}
+    if not required.issubset(df.columns):
+        return False
+    plot_df = df[df["max_update_gap_us"].notna() & df["test2_elapsed_error_ms"].notna()].copy()
+    if plot_df.empty:
+        return False
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    color = plot_df["speed_mm_s"] if "speed_mm_s" in plot_df.columns else None
+    scatter = ax.scatter(plot_df["max_update_gap_us"], plot_df["test2_elapsed_error_ms"], c=color, cmap="viridis", s=70, alpha=0.85)
+    if color is not None:
+        fig.colorbar(scatter, ax=ax, label="speed_mm_s")
+    ax.axhline(0, color="#6b7280", linewidth=1)
+    ax.set_title(title("Max Update Gap vs Elapsed Error", title_prefix))
+    ax.set_xlabel("max_update_gap_us")
+    ax.set_ylabel("elapsed_error_ms")
+    ax.grid(True, alpha=0.3)
+    save_figure(fig, out_path)
+    return True
+
+
+def plot_sg_elapsed_comparison(df: pd.DataFrame, out_path: str, title_prefix: str = "") -> bool:
+    required = {"sg_enabled", "speed_mm_s"}
+    metric = "test2_forward_firmware_motion_elapsed_ms"
+    fallback_metric = "test2_forward_pc_wait_elapsed_ms"
+    if metric not in df.columns and fallback_metric in df.columns:
+        metric = fallback_metric
+    if metric not in df.columns or not required.issubset(df.columns):
+        return False
+    plot_df = df[df[metric].notna() & df["sg_enabled"].notna()].copy()
+    if plot_df.empty or plot_df["sg_enabled"].nunique(dropna=True) < 2:
+        return False
+
+    group_columns = ["sg_enabled", "accel_mm_s2"]
+    if "current_ma" in plot_df.columns and plot_df["current_ma"].nunique(dropna=True) > 1:
+        group_columns.append("current_ma")
+    if "chop_mode" in plot_df.columns and plot_df["chop_mode"].nunique(dropna=True) > 1:
+        group_columns.append("chop_mode")
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    for key, group in plot_df.groupby(group_columns, dropna=False):
+        group = group.sort_values("speed_mm_s")
+        label = velocity_elapsed_label(group_columns, key)
+        ax.plot(group["speed_mm_s"], group[metric], marker="o", label=label)
+
+    ax.set_title(title("SG Enabled vs Disabled Elapsed", title_prefix))
+    ax.set_xlabel("speed_mm_s")
+    ax.set_ylabel(metric)
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=8)
+    save_figure(fig, out_path)
+    return True
+
+
+def plot_elapsed_variability_by_speed(df: pd.DataFrame, out_path: str, title_prefix: str = "") -> bool:
+    """速度に対する平均elapsedと標準偏差を加速度別に表示する。"""
+    required = {"speed_mm_s", "accel_mm_s2", "elapsed_mean_ms", "elapsed_std_ms"}
+    if df.empty or not required.issubset(df.columns):
+        return False
+
+    plot_df = df[df["elapsed_mean_ms"].notna()].copy()
+    if plot_df.empty:
+        return False
+
+    group_columns = ["accel_mm_s2"]
+    if "current_ma" in plot_df.columns and plot_df["current_ma"].nunique(dropna=False) > 1:
+        group_columns.append("current_ma")
+    if "chop_mode" in plot_df.columns and plot_df["chop_mode"].nunique(dropna=False) > 1:
+        group_columns.append("chop_mode")
+    if "microsteps" in plot_df.columns and plot_df["microsteps"].nunique(dropna=False) > 1:
+        group_columns.append("microsteps")
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    for key, group in plot_df.groupby(group_columns, dropna=False):
+        group = group.sort_values("speed_mm_s")
+        label = velocity_elapsed_label(group_columns, key)
+        ax.errorbar(
+            group["speed_mm_s"],
+            group["elapsed_mean_ms"],
+            yerr=group["elapsed_std_ms"].fillna(0),
+            marker="o",
+            capsize=3,
+            linewidth=1.8,
+            label=label,
+        )
+
+    ax.set_title(title("Elapsed Mean and StdDev by Speed", title_prefix))
+    ax.set_xlabel("commanded speed_mm_s")
+    ax.set_ylabel("test2 elapsed_ms mean +/- stddev")
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=8)
+    save_figure(fig, out_path)
+    return True
+
+
+def plot_elapsed_histogram(df: pd.DataFrame, out_path: str, title_prefix: str = "") -> bool:
+    """test2_forward_elapsed_msの分布を加速度別ヒストグラムで表示する。"""
+    if "test2_forward_elapsed_ms" not in df.columns:
+        return False
+
+    plot_df = df[df["test2_forward_elapsed_ms"].notna()].copy()
+    if plot_df.empty:
+        return False
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    accel_values = sorted(plot_df["accel_mm_s2"].dropna().unique()) if "accel_mm_s2" in plot_df.columns else []
+    bins = min(40, max(10, int(math.sqrt(len(plot_df))) + 5))
+    if accel_values:
+        for accel in accel_values:
+            group = plot_df[plot_df["accel_mm_s2"] == accel]
+            ax.hist(
+                group["test2_forward_elapsed_ms"],
+                bins=bins,
+                alpha=0.35,
+                label=f"accel {fmt_num(accel)}",
+                edgecolor="white",
+                linewidth=0.5,
+            )
+        ax.legend(fontsize=8, title="accel_mm_s2")
+    else:
+        ax.hist(plot_df["test2_forward_elapsed_ms"], bins=bins, color="#4c78a8", alpha=0.8, edgecolor="white")
+
+    ax.set_title(title("test2 Forward Elapsed Histogram", title_prefix))
+    ax.set_xlabel("elapsed_ms for test2 command=5")
+    ax.set_ylabel("sample count")
+    ax.grid(True, axis="y", alpha=0.3)
+    save_figure(fig, out_path)
+    return True
+
+
+def velocity_elapsed_label(columns: list[str], key) -> str:
+    values = key if isinstance(key, tuple) else (key,)
+    parts: list[str] = []
+    for column, value in zip(columns, values):
+        if column == "current_ma":
+            parts.append(f"{fmt_num(value)} mA")
+        elif column == "accel_mm_s2":
+            parts.append(f"accel {fmt_num(value)}")
+        elif column == "microsteps":
+            parts.append(f"1/{fmt_num(value)}")
+        elif column == "chop_mode":
+            parts.append(str(value))
+        elif column == "sg_enabled":
+            parts.append(f"SG {fmt_num(value)}")
+        else:
+            parts.append(f"{column}={fmt_num(value) if isinstance(value, (int, float)) else value}")
+    return ", ".join(parts)
+
+
 def calculate_margin_score(df: pd.DataFrame) -> pd.DataFrame:
     """OK条件ごとに周囲セルを見て margin_score を計算する。"""
     df = df.copy()
@@ -647,6 +958,15 @@ def write_markdown_report(
     figure_ext: str,
     max_by_current: pd.DataFrame,
     max_by_accel: pd.DataFrame,
+    velocity_elapsed_generated: bool,
+    variability_df: pd.DataFrame,
+    elapsed_variability_generated: bool,
+    elapsed_histogram_generated: bool,
+    pc_wait_elapsed_generated: bool,
+    firmware_motion_elapsed_generated: bool,
+    expected_ideal_elapsed_generated: bool,
+    update_gap_elapsed_error_generated: bool,
+    sg_elapsed_comparison_generated: bool,
 ) -> None:
     """Markdownレポートを生成する。"""
     ok_count = int((df["final_result"] == "OK").sum())
@@ -697,6 +1017,56 @@ def write_markdown_report(
         "## 6. Error vs Speed",
         f"![Error vs Speed]({figures_dir}/{FIGURE_NAMES['error_speed']}.{figure_ext})",
         "",
+        "## 7. Commanded Speed vs Elapsed",
+    ])
+    if velocity_elapsed_generated:
+        lines.append(f"![Commanded Speed vs Elapsed]({figures_dir}/{FIGURE_NAMES['velocity_elapsed']}.{figure_ext})")
+    else:
+        lines.append("test2_forward_elapsed_ms がないため、速度指示値ごとの elapsed_ms グラフは生成していません。")
+    lines.extend([
+        "",
+        "## 8. Elapsed Variability",
+    ])
+    if elapsed_variability_generated:
+        lines.append(f"![Elapsed Variability]({figures_dir}/{FIGURE_NAMES['elapsed_variability']}.{figure_ext})")
+    else:
+        lines.append("repeat結果または test2_forward_elapsed_ms が不足しているため、ばらつきグラフは生成していません。")
+    lines.extend([
+        "",
+        "### Largest elapsed variation",
+        markdown_table_from_df(variability_rank_table(variability_df), variability_columns()),
+        "",
+        "Full condition-level statistics are written to `variability_stats.csv`.",
+        "",
+        "## 9. Elapsed Histogram",
+    ])
+    if elapsed_histogram_generated:
+        lines.append(f"![Elapsed Histogram]({figures_dir}/{FIGURE_NAMES['elapsed_histogram']}.{figure_ext})")
+    else:
+        lines.append("test2_forward_elapsed_ms がないため、elapsed_ms のヒストグラムは生成していません。")
+
+    lines.extend([
+        "",
+        "## 10. Timing Decomposition",
+    ])
+    timing_figures = [
+        (pc_wait_elapsed_generated, "PC Wait Elapsed", "pc_wait_elapsed"),
+        (firmware_motion_elapsed_generated, "Firmware Motion Elapsed", "firmware_motion_elapsed"),
+        (expected_ideal_elapsed_generated, "Expected Ideal Elapsed", "expected_ideal_elapsed"),
+        (update_gap_elapsed_error_generated, "Max Update Gap vs Elapsed Error", "update_gap_elapsed_error"),
+        (sg_elapsed_comparison_generated, "SG Enabled vs Disabled Elapsed", "sg_elapsed_comparison"),
+    ]
+    for generated, label, key in timing_figures:
+        lines.append("")
+        lines.append(f"### {label}")
+        if generated:
+            lines.append(f"![{label}]({figures_dir}/{FIGURE_NAMES[key]}.{figure_ext})")
+        else:
+            lines.append("必要な列が不足しているため、このグラフは生成していません。")
+    lines.extend(timing_diagnosis(df))
+
+    lines.extend([
+        "",
         "## Notes",
         "- OK means abs_error_mm is below the OK threshold and no explicit NG was observed.",
         "- WARN means abs_error_mm is above the OK threshold but below the NG threshold.",
@@ -719,6 +1089,108 @@ def auto_comment(df: pd.DataFrame) -> str:
         f"駆動電流 {fmt_num(best['current_ma'])} mA 付近が速度と安定性の候補です。"
         "OK/NGだけでなくずれ量を確認することで、脱調境界に近い条件を避けやすくなります。"
     )
+
+
+def timing_diagnosis(df: pd.DataFrame) -> list[str]:
+    lines = ["", "### Timing Diagnosis", ""]
+    pc = numeric_series(df, "test2_forward_pc_wait_elapsed_ms")
+    fw = numeric_series(df, "test2_forward_firmware_motion_elapsed_ms")
+    post = numeric_series(df, "test2_forward_post_motion_before_complete_ms")
+    err = numeric_series(df, "test2_elapsed_error_ms")
+    gap = numeric_series(df, "max_update_gap_us")
+
+    pc_minus_fw = (pc - fw).dropna() if not pc.empty and not fw.empty else pd.Series(dtype=float)
+    summary_rows = [
+        ["PC待ち時間由来", diagnosis_label(pc_minus_fw, threshold=20.0), metric_summary(pc_minus_fw, "pc_wait - firmware_motion ms")],
+        ["ファームsummary出力由来", diagnosis_label(post.dropna(), threshold=20.0), metric_summary(post.dropna(), "post_motion_before_complete ms")],
+        ["SG/TMC UARTブロック由来", sg_blocking_diagnosis(df, err, gap), "sg_enabled別比較とmax_update_gap_us相関を確認"],
+        ["motion profile離散化由来", diagnosis_label(err.abs().dropna(), threshold=10.0), metric_summary(err.dropna(), "firmware_motion - expected_model ms")],
+    ]
+    lines.append(markdown_table_rows(["判定項目", "判定", "根拠"], summary_rows))
+    return lines
+
+
+def numeric_series(df: pd.DataFrame, column: str) -> pd.Series:
+    if column not in df.columns:
+        return pd.Series(dtype=float)
+    return pd.to_numeric(df[column].astype(str).str.split(";").str[0], errors="coerce")
+
+
+def diagnosis_label(values: pd.Series, threshold: float) -> str:
+    if values.empty:
+        return "UNKNOWN"
+    median_abs = values.abs().median()
+    if pd.isna(median_abs):
+        return "UNKNOWN"
+    return "LIKELY" if median_abs >= threshold else "UNLIKELY"
+
+
+def metric_summary(values: pd.Series, label: str) -> str:
+    if values.empty:
+        return f"{label}: NA"
+    return f"{label}: median={values.median():.3f}, max={values.max():.3f}"
+
+
+def markdown_table_rows(headers: list[str], rows: list[list[str]]) -> str:
+    table = [
+        "| " + " | ".join(headers) + " |",
+        "| " + " | ".join("---" for _ in headers) + " |",
+    ]
+    for row in rows:
+        table.append("| " + " | ".join(str(value) for value in row) + " |")
+    return "\n".join(table)
+
+
+def sg_blocking_diagnosis(df: pd.DataFrame, err: pd.Series, gap: pd.Series) -> str:
+    if "sg_enabled" not in df.columns:
+        return "UNKNOWN"
+    sg = numeric_series(df, "sg_enabled")
+    if sg.dropna().nunique() < 2:
+        return "UNKNOWN"
+    metric = numeric_series(df, "test2_forward_firmware_motion_elapsed_ms")
+    if metric.empty:
+        metric = numeric_series(df, "test2_forward_pc_wait_elapsed_ms")
+    enabled = metric[sg == 1].dropna()
+    disabled = metric[sg == 0].dropna()
+    if enabled.empty or disabled.empty:
+        return "UNKNOWN"
+    delta = enabled.median() - disabled.median()
+    if delta >= 20.0:
+        return "LIKELY"
+    if not err.empty and not gap.empty and len(err.dropna()) >= 3:
+        corr = err.corr(gap)
+        if not pd.isna(corr) and corr >= 0.6:
+            return "POSSIBLE"
+    return "UNLIKELY"
+
+
+def variability_columns() -> list[str]:
+    return [
+        "speed_mm_s",
+        "accel_mm_s2",
+        "sample_count",
+        "pass_count",
+        "success_rate",
+        "elapsed_mean_ms",
+        "elapsed_std_ms",
+        "elapsed_min_ms",
+        "elapsed_max_ms",
+        "elapsed_range_ms",
+        "elapsed_cv_pct",
+    ]
+
+
+def variability_rank_table(df: pd.DataFrame, limit: int = 25) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame(columns=variability_columns())
+    ranked = df.copy()
+    for column in variability_columns():
+        if column not in ranked.columns:
+            ranked[column] = np.nan
+    return ranked.sort_values(
+        ["elapsed_std_ms", "elapsed_range_ms", "speed_mm_s"],
+        ascending=[False, False, True],
+    ).head(limit)[variability_columns()]
 
 
 def pivot_grid(df: pd.DataFrame, value_col: str) -> pd.DataFrame:

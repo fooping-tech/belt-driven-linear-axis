@@ -8,6 +8,7 @@ import csv
 import dataclasses
 import datetime as dt
 import glob
+import math
 import os
 import re
 import subprocess
@@ -36,6 +37,18 @@ RESULT_COLUMNS = (
     "final_error_mm",
     "final_remaining_steps",
     "elapsed_sec",
+    "test1_forward_elapsed_ms",
+    "test2_forward_elapsed_ms",
+    "test1_forward_firmware_motion_elapsed_ms",
+    "test2_forward_firmware_motion_elapsed_ms",
+    "test2_forward_pc_wait_elapsed_ms",
+    "test2_forward_post_motion_before_complete_ms",
+    "test2_distance_mm",
+    "test2_moved_steps",
+    "test2_expected_ideal_ms",
+    "test2_expected_firmware_model_ms",
+    "test2_elapsed_error_ms",
+    "test2_elapsed_error_ratio",
     "sg_min",
     "sg_max",
     "sg_avg",
@@ -234,6 +247,19 @@ class TestOutcome:
     final_status: str
     log_excerpt: list[str]
     timeout_diag: "TimeoutDiagnostic | None" = None
+    forward_elapsed_ms: int | None = None
+    move_timings: list["FirmwareMoveTiming"] = dataclasses.field(default_factory=list)
+
+
+@dataclasses.dataclass(frozen=True)
+class FirmwareMoveTiming:
+    firmware_motion_elapsed_ms: float | None = None
+    post_motion_before_complete_ms: float | None = None
+    distance_mm: float | None = None
+    moved_steps: int | None = None
+    speed_mm_s: float | None = None
+    accel_mm_s2: float | None = None
+    profile: str | None = None
 
 
 @dataclasses.dataclass
@@ -424,6 +450,8 @@ class SimulatedRunner:
             return True, "OK", ["Acceleration set: sim"]
         if command.startswith("v "):
             return True, "OK", ["Default move speed set: sim"]
+        if command in {"1", "5"} or command.lower() == "b":
+            return self.wait_for_move(command, timeout_sec)
         return True, "OK", [f"sim: {command}"]
 
     def wait_for_homing(self, timeout_sec: float) -> tuple[bool, str, list[str]]:
@@ -435,11 +463,21 @@ class SimulatedRunner:
         _ = timeout_sec
         if command == "1":
             self.position_units += 1
+            distance_mm = 10.0
         elif command == "5":
             self.position_units += 5
+            distance_mm = 50.0
         elif command.lower() == "b":
             self.position_units -= 1
-        return True, "OK", ["Move complete", self._status_line()]
+            distance_mm = -10.0
+        else:
+            distance_mm = 0.0
+        elapsed_ms = abs(distance_mm) / 80.0 * 1000.0 if distance_mm else 0.0
+        return True, "OK", [
+            f"MOVE_TIMING,delta_mm={distance_mm:.4f},start_steps=0,target_steps=0,moved_steps=0,distance_mm={distance_mm:.4f},speed_mm_s=80.0000,accel_mm_s2=100.0000,profile=trap,started_us=0,target_reached_us=0,complete_print_us=0,complete_print_before_us=0,firmware_motion_elapsed_ms={elapsed_ms:.3f},post_motion_before_complete_ms=2.000,steps_per_mm=80.0000,microsteps=16",
+            "Move complete",
+            self._status_line(),
+        ]
 
     def send_and_wait_raw_no_probe(
         self,
@@ -476,6 +514,7 @@ class SimulatedRunner:
 def main() -> int:
     args = parse_args()
     params = load_params(args.csv)
+    expanded_params = expand_params(params, args.repeat_count)
     timestamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
 
     reports_dir = Path(args.reports_dir)
@@ -489,9 +528,9 @@ def main() -> int:
 
     results: list[SweepResult] = []
     try:
-        for index, param in enumerate(params, start=1):
+        for index, param in enumerate(expanded_params, start=1):
             runner.drain(0.2)
-            prefix = f"[{index}/{len(params)}] speed={fmt_num(param.speed_mm_s)} accel={fmt_num(param.accel_mm_s2)} current={param.current_ma} mode={param.chop_mode} microsteps={param.microsteps}"
+            prefix = f"[{index}/{len(expanded_params)}] speed={fmt_num(param.speed_mm_s)} accel={fmt_num(param.accel_mm_s2)} current={param.current_ma} mode={param.chop_mode} microsteps={param.microsteps} repeat={value_or_na(param.repeat_index)}"
             print(prefix, flush=True)
             result = run_param(runner, param, args.return_speed, args.command_timeout, args.homing_timeout, args.limit_position_tolerance, args.limit_settle_sec, args.no_line_probe_interval, timestamp)
             if result.final_result != "PASS":
@@ -577,6 +616,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit-position-tolerance", type=float, default=0.5, help="max final position error in mm when the limit turns ON")
     parser.add_argument("--limit-settle-sec", type=float, default=0.2, help="extra wait after final b when raw limit is ON but debounced limit is still OFF")
     parser.add_argument("--no-line-probe-interval", type=float, default=1.0, help="send lightweight diag probe after this many seconds without serial lines during long waits; <=0 disables")
+    parser.add_argument("--repeat-count", type=int, default=1, help="run each input CSV row this many times; repeat_index is assigned 1..N for generated repeats")
     parser.add_argument("--skip-plot-report", action="store_true", help="do not run tools/plot_step_loss_sweep.py after writing the sweep CSV")
     parser.add_argument("--no-plot-cell-labels", action="store_true", help="do not label cells in generated plot heatmaps")
     parser.add_argument("--plot-error-scale", choices=("linear", "log"), default="linear", help="error scale for generated plot report")
@@ -603,6 +643,19 @@ def load_params(path: str) -> list[SweepParam]:
     if not params:
         raise SystemExit("Input CSV has no parameter rows")
     return params
+
+
+def expand_params(params: list[SweepParam], repeat_count: int) -> list[SweepParam]:
+    if repeat_count < 1:
+        raise SystemExit("--repeat-count must be >= 1")
+    if repeat_count == 1:
+        return params
+
+    expanded: list[SweepParam] = []
+    for param in params:
+        for repeat_index in range(1, repeat_count + 1):
+            expanded.append(dataclasses.replace(param, repeat_index=repeat_index))
+    return expanded
 
 
 def parse_param_row(row: dict[str, str], row_number: int) -> SweepParam:
@@ -735,6 +788,7 @@ def run_param(
             sg=SgStats(),
             final_status="",
             log_excerpt=[],
+            forward_elapsed_ms=None,
         )
     else:
         test1 = run_test(runner, param, "test1", ["1", "1", "1", "1", "1"], return_speed, command_timeout, homing_timeout, limit_position_tolerance, limit_settle_sec, no_line_probe_interval_sec)
@@ -826,6 +880,7 @@ def run_current_validate_only(
         final_status=final_status,
         log_excerpt=trim_log(log),
         timeout_diag=timeout_diag,
+        move_timings=parse_firmware_move_timings(log),
     )
 
 
@@ -912,19 +967,29 @@ def run_test(
             return outcome(name, "FAIL", "TO", parse_limit_state(diag.status_lines), "UNKNOWN", last_status(diag.status_lines), log, limit_position_tolerance, diag)
         return outcome(name, "FAIL", code, "UNKNOWN", "UNKNOWN", last_status(lines), log, limit_position_tolerance)
 
+    forward_elapsed_ms: int | None = 0 if forward_commands else None
     for index, command in enumerate(forward_commands, start=1):
         started = time.monotonic()
         phase = f"{name}:move:{index}"
         ok, code, lines = runner.send_and_wait(command, ("Move complete",), command_timeout, phase=phase, no_line_probe_interval_sec=probe_interval)
         elapsed_ms = elapsed_ms_since(started)
+        if forward_elapsed_ms is not None:
+            forward_elapsed_ms += elapsed_ms
+        timing_line = (
+            f"MOVE_TIMING,test={name},phase={phase},command={command},"
+            f"elapsed_ms={elapsed_ms},forward_elapsed_ms={forward_elapsed_ms if forward_elapsed_ms is not None else 'NA'},"
+            f"result={code}"
+        )
+        print(f"  {timing_line}", flush=True)
+        log.append(timing_line)
         log.extend(tag_lines(command, lines))
         if not ok:
             if code == "TO":
                 diag = diagnose_timeout(runner, f"{name}:move:{index}", command, elapsed_ms, lines, log)
                 final_lines = diag.status_lines or lines
-                return outcome(name, "FAIL", "TO", parse_limit_state(final_lines), "UNKNOWN", last_status(final_lines), log, limit_position_tolerance, diag)
+                return outcome(name, "FAIL", "TO", parse_limit_state(final_lines), "UNKNOWN", last_status(final_lines), log, limit_position_tolerance, diag, forward_elapsed_ms=forward_elapsed_ms)
             poll_motion_timing(runner, log)
-            return outcome(name, "FAIL", code, parse_limit_state(lines), "UNKNOWN", last_status(lines), log, limit_position_tolerance)
+            return outcome(name, "FAIL", code, parse_limit_state(lines), "UNKNOWN", last_status(lines), log, limit_position_tolerance, forward_elapsed_ms=forward_elapsed_ms)
 
     poll_motion_timing(runner, log)
 
@@ -936,8 +1001,8 @@ def run_test(
     if not ok:
         if code == "TO":
             diag = diagnose_timeout(runner, f"{name}:setup:return_speed", return_speed_command, elapsed_ms, lines, log)
-            return outcome(name, "FAIL", "SETUP_TO", parse_limit_state(diag.status_lines), "UNKNOWN", last_status(diag.status_lines), log, limit_position_tolerance, diag)
-        return outcome(name, "FAIL", code, parse_limit_state(lines), "UNKNOWN", last_status(lines), log, limit_position_tolerance)
+            return outcome(name, "FAIL", "SETUP_TO", parse_limit_state(diag.status_lines), "UNKNOWN", last_status(diag.status_lines), log, limit_position_tolerance, diag, forward_elapsed_ms=forward_elapsed_ms)
+        return outcome(name, "FAIL", code, parse_limit_state(lines), "UNKNOWN", last_status(lines), log, limit_position_tolerance, forward_elapsed_ms=forward_elapsed_ms)
 
     final_lines: list[str] = []
     for index in range(5):
@@ -951,7 +1016,7 @@ def run_test(
             if code == "TO":
                 diag = diagnose_timeout(runner, f"{name}:return:b:{index + 1}", "b", elapsed_ms, lines, log)
                 final_lines = diag.status_lines or lines
-                return outcome(name, "FAIL", "TO", parse_limit_state(final_lines), "UNKNOWN", last_status(final_lines), log, limit_position_tolerance, diag)
+                return outcome(name, "FAIL", "TO", parse_limit_state(final_lines), "UNKNOWN", last_status(final_lines), log, limit_position_tolerance, diag, forward_elapsed_ms=forward_elapsed_ms)
             poll_motion_timing(runner, log)
             if index == 4 and code == "ME":
                 started = time.monotonic()
@@ -964,17 +1029,17 @@ def run_test(
                 if status_code == "TO":
                     diag = diagnose_timeout(runner, f"{name}:status:after_motion_error", "s", elapsed_ms, status_lines, log)
                     final_lines = diag.status_lines or final_lines
-                    return outcome(name, "FAIL", "TO", parse_limit_state(final_lines), "UNKNOWN", last_status(final_lines), log, limit_position_tolerance, diag)
+                    return outcome(name, "FAIL", "TO", parse_limit_state(final_lines), "UNKNOWN", last_status(final_lines), log, limit_position_tolerance, diag, forward_elapsed_ms=forward_elapsed_ms)
                 if final_limit == "ON":
                     if not final_position_within_tolerance(final_status, log, limit_position_tolerance):
-                        return outcome(name, "FAIL", "LPOS", final_limit, "DURING_MOVE", final_status, log, limit_position_tolerance)
-                    return outcome(name, "PASS", "OK", final_limit, "DURING_MOVE", final_status, log, limit_position_tolerance)
+                        return outcome(name, "FAIL", "LPOS", final_limit, "DURING_MOVE", final_status, log, limit_position_tolerance, forward_elapsed_ms=forward_elapsed_ms)
+                    return outcome(name, "PASS", "OK", final_limit, "DURING_MOVE", final_status, log, limit_position_tolerance, forward_elapsed_ms=forward_elapsed_ms)
             early_limit = parse_limit_state(lines)
             early_status = last_status(lines)
             early_timing = "EARLY_LIMIT" if code == "ME" and early_limit == "ON" else "UNKNOWN"
             if early_timing == "EARLY_LIMIT" and final_position_within_tolerance(early_status, log, limit_position_tolerance):
-                return outcome(name, "PASS", "OK", early_limit, early_timing, early_status, log, limit_position_tolerance)
-            return outcome(name, "FAIL", code, early_limit, early_timing, early_status, log, limit_position_tolerance)
+                return outcome(name, "PASS", "OK", early_limit, early_timing, early_status, log, limit_position_tolerance, forward_elapsed_ms=forward_elapsed_ms)
+            return outcome(name, "FAIL", code, early_limit, early_timing, early_status, log, limit_position_tolerance, forward_elapsed_ms=forward_elapsed_ms)
 
     started = time.monotonic()
     status_code, status_lines = runner.status()
@@ -992,18 +1057,18 @@ def run_test(
             final_status = last_status(final_lines)
             final_limit = parse_limit_state(final_lines)
             if final_limit == "ON" and final_position_within_tolerance(final_status, log, limit_position_tolerance):
-                return outcome(name, "PASS", "OK", final_limit, "AFTER_SETTLE", final_status, log, limit_position_tolerance)
+                return outcome(name, "PASS", "OK", final_limit, "AFTER_SETTLE", final_status, log, limit_position_tolerance, forward_elapsed_ms=forward_elapsed_ms)
     if status_code == "TO":
         diag = diagnose_timeout(runner, f"{name}:status:final", "s", elapsed_ms, status_lines, log)
         final_lines = diag.status_lines or final_lines
-        return outcome(name, "FAIL", "TO", parse_limit_state(final_lines), "UNKNOWN", last_status(final_lines), log, limit_position_tolerance, diag)
+        return outcome(name, "FAIL", "TO", parse_limit_state(final_lines), "UNKNOWN", last_status(final_lines), log, limit_position_tolerance, diag, forward_elapsed_ms=forward_elapsed_ms)
     if final_limit == "ON":
         if not final_position_within_tolerance(final_status, log, limit_position_tolerance):
-            return outcome(name, "FAIL", "LPOS", final_limit, "AFTER_COMPLETE", final_status, log, limit_position_tolerance)
-        return outcome(name, "PASS", "OK", final_limit, "AFTER_COMPLETE", final_status, log, limit_position_tolerance)
+            return outcome(name, "FAIL", "LPOS", final_limit, "AFTER_COMPLETE", final_status, log, limit_position_tolerance, forward_elapsed_ms=forward_elapsed_ms)
+        return outcome(name, "PASS", "OK", final_limit, "AFTER_COMPLETE", final_status, log, limit_position_tolerance, forward_elapsed_ms=forward_elapsed_ms)
     if final_limit == "OFF":
-        return outcome(name, "FAIL", "LOFF", final_limit, "NOT_REACHED", final_status, log, limit_position_tolerance)
-    return outcome(name, "FAIL", "SL", "UNKNOWN", "UNKNOWN", final_status, log, limit_position_tolerance)
+        return outcome(name, "FAIL", "LOFF", final_limit, "NOT_REACHED", final_status, log, limit_position_tolerance, forward_elapsed_ms=forward_elapsed_ms)
+    return outcome(name, "FAIL", "SL", "UNKNOWN", "UNKNOWN", final_status, log, limit_position_tolerance, forward_elapsed_ms=forward_elapsed_ms)
 
 
 def outcome(
@@ -1016,6 +1081,7 @@ def outcome(
     log: list[str],
     tolerance_mm: float = 0.5,
     timeout_diag: TimeoutDiagnostic | None = None,
+    forward_elapsed_ms: int | None = None,
 ) -> TestOutcome:
     error_mm = final_error_mm(final_status, log)
     remaining_steps = final_remaining_steps(log)
@@ -1032,6 +1098,8 @@ def outcome(
         final_status=final_status,
         log_excerpt=trim_log(log),
         timeout_diag=timeout_diag,
+        forward_elapsed_ms=forward_elapsed_ms,
+        move_timings=parse_firmware_move_timings(log),
     )
 
 
@@ -1090,6 +1158,42 @@ def parse_sg_stats(lines: list[str]) -> SgStats:
             continue
         apply_sg_key_values(stats, parsed)
     return stats
+
+
+def parse_firmware_move_timings(lines: list[str]) -> list[FirmwareMoveTiming]:
+    forward_move_count = sum(
+        1
+        for line in lines
+        if line.startswith("MOVE_TIMING,test=") and ",phase=" in line and ":move:" in line
+    )
+    timings: list[FirmwareMoveTiming] = []
+    for line in lines:
+        values = parse_move_timing_key_values(line)
+        if not values or "firmware_motion_elapsed_ms" not in values:
+            continue
+        timings.append(FirmwareMoveTiming(
+            firmware_motion_elapsed_ms=optional_float(values.get("firmware_motion_elapsed_ms")),
+            post_motion_before_complete_ms=optional_float(values.get("post_motion_before_complete_ms")),
+            distance_mm=optional_float(values.get("distance_mm")),
+            moved_steps=optional_int(values.get("moved_steps")),
+            speed_mm_s=optional_float(values.get("speed_mm_s")),
+            accel_mm_s2=optional_float(values.get("accel_mm_s2")),
+            profile=optional_text(values.get("profile")),
+        ))
+    return timings[:forward_move_count] if forward_move_count > 0 else timings
+
+
+def parse_move_timing_key_values(line: str) -> dict[str, str]:
+    text = line.strip()
+    if not text.startswith("MOVE_TIMING,"):
+        return {}
+    values: dict[str, str] = {}
+    for part in text.split(","):
+        if "=" not in part:
+            continue
+        key, value = part.split("=", 1)
+        values[key.strip().lower()] = value.strip()
+    return values
 
 
 def parse_sg_key_values(line: str) -> dict[str, str]:
@@ -1602,7 +1706,8 @@ def format_test_outcome(test: TestOutcome) -> str:
         f"{test.result} score={test.score:.1f} reason={test.failure_reason} "
         f"limit={test.final_limit_state} timing={test.final_limit_timing} "
         f"error={format_optional_mm(test.final_error_mm)} "
-        f"remainingSteps={format_optional_int(test.final_remaining_steps)}"
+        f"remainingSteps={format_optional_int(test.final_remaining_steps)} "
+        f"forward_elapsed_ms={format_optional_int(test.forward_elapsed_ms)}"
     )
     if is_timeout_reason(test.failure_reason) and test.timeout_diag is not None:
         diag = test.timeout_diag
@@ -1669,11 +1774,20 @@ def append_plot_report_section(report_path: Path, plot_dir: Path, plot_ok: bool,
             (f"04_max_stable_speed_by_current.{figure_format}", "Max Stable Speed by Current"),
             (f"05_max_stable_speed_by_accel.{figure_format}", "Max Stable Speed by Accel"),
             (f"06_error_vs_speed_by_current.{figure_format}", "Error vs Speed by Current"),
+            (f"07_velocity_elapsed_by_speed.{figure_format}", "Commanded Speed vs Elapsed"),
+            (f"08_elapsed_variability_by_speed.{figure_format}", "Elapsed Variability"),
+            (f"09_elapsed_histogram.{figure_format}", "Elapsed Histogram"),
+            (f"10_pc_wait_elapsed_by_speed.{figure_format}", "PC Wait Elapsed"),
+            (f"11_firmware_motion_elapsed_by_speed.{figure_format}", "Firmware Motion Elapsed"),
+            (f"12_expected_ideal_by_speed.{figure_format}", "Expected Ideal Elapsed"),
+            (f"13_update_gap_vs_elapsed_error.{figure_format}", "Max Update Gap vs Elapsed Error"),
+            (f"14_sg_elapsed_comparison.{figure_format}", "SG Enabled vs Disabled Elapsed"),
         ]:
             image_path = plot_dir / "figures" / filename
-            image_rel = relative_link(report_path.parent, image_path)
-            lines.append("")
-            lines.append(f"![{label}]({image_rel})")
+            if image_path.exists():
+                image_rel = relative_link(report_path.parent, image_path)
+                lines.append("")
+                lines.append(f"![{label}]({image_rel})")
     else:
         lines.append("Plot report was not generated.")
         lines.append("")
@@ -1689,6 +1803,31 @@ def relative_link(base_dir: Path, target: Path) -> str:
     return os.path.relpath(target, start=base_dir)
 
 
+def last_firmware_move_timing(test: TestOutcome) -> FirmwareMoveTiming | None:
+    return test.move_timings[-1] if test.move_timings else None
+
+
+def sum_optional_float(values: Iterable[float | None]) -> float | None:
+    total = 0.0
+    found = False
+    for value in values:
+        if value is None:
+            continue
+        total += value
+        found = True
+    return total if found else None
+
+
+def expected_motion_ms(distance_mm: float, speed_mm_s: float, accel_mm_s2: float) -> float | None:
+    distance = abs(distance_mm)
+    if distance <= 0.0 or speed_mm_s <= 0.0 or accel_mm_s2 <= 0.0:
+        return None
+    d_accdec = speed_mm_s * speed_mm_s / accel_mm_s2
+    if distance >= d_accdec:
+        return (distance / speed_mm_s + speed_mm_s / accel_mm_s2) * 1000.0
+    return 2.0 * math.sqrt(distance / accel_mm_s2) * 1000.0
+
+
 def result_csv_row(result: SweepResult) -> dict[str, str | int | float]:
     p = result.param
     sg = result.sg
@@ -1702,6 +1841,28 @@ def result_csv_row(result: SweepResult) -> dict[str, str | int | float]:
     current_error = current_error_ma(result)
     current_ratio = current_error_ratio(result)
     current_tolerance = current_tolerance_ma(result)
+    test1_fw_motion = sum_optional_float(item.firmware_motion_elapsed_ms for item in result.test1.move_timings)
+    test2_timing = last_firmware_move_timing(result.test2)
+    test2_fw_motion = test2_timing.firmware_motion_elapsed_ms if test2_timing is not None else None
+    test2_post_motion = test2_timing.post_motion_before_complete_ms if test2_timing is not None else None
+    test2_distance = test2_timing.distance_mm if test2_timing is not None else None
+    test2_moved_steps = test2_timing.moved_steps if test2_timing is not None else None
+    test2_expected_ideal = expected_motion_ms(50.0, p.speed_mm_s, p.accel_mm_s2)
+    test2_model_distance = abs(test2_distance) if test2_distance is not None else 50.0
+    test2_model_speed = test2_timing.speed_mm_s if test2_timing is not None and test2_timing.speed_mm_s is not None else p.speed_mm_s
+    test2_model_accel = test2_timing.accel_mm_s2 if test2_timing is not None and test2_timing.accel_mm_s2 is not None else p.accel_mm_s2
+    test2_expected_firmware_model = expected_motion_ms(test2_model_distance, test2_model_speed, test2_model_accel)
+    test2_elapsed_source = test2_fw_motion if test2_fw_motion is not None else result.test2.forward_elapsed_ms
+    test2_elapsed_error = (
+        test2_elapsed_source - test2_expected_firmware_model
+        if test2_elapsed_source is not None and test2_expected_firmware_model is not None
+        else None
+    )
+    test2_elapsed_error_ratio = (
+        test2_elapsed_error / test2_expected_firmware_model
+        if test2_elapsed_error is not None and test2_expected_firmware_model not in (None, 0.0)
+        else None
+    )
     return {
         "timestamp": result.timestamp,
         "speed_mm_s": fmt_num(p.speed_mm_s),
@@ -1719,6 +1880,18 @@ def result_csv_row(result: SweepResult) -> dict[str, str | int | float]:
         "final_error_mm": "" if result.final_error_mm is None else f"{result.final_error_mm:.4f}",
         "final_remaining_steps": "" if result.final_remaining_steps is None else result.final_remaining_steps,
         "elapsed_sec": f"{result.elapsed_sec:.3f}",
+        "test1_forward_elapsed_ms": missing if result.test1.forward_elapsed_ms is None else result.test1.forward_elapsed_ms,
+        "test2_forward_elapsed_ms": missing if result.test2.forward_elapsed_ms is None else result.test2.forward_elapsed_ms,
+        "test1_forward_firmware_motion_elapsed_ms": missing if test1_fw_motion is None else f"{test1_fw_motion:.3f}",
+        "test2_forward_firmware_motion_elapsed_ms": missing if test2_fw_motion is None else f"{test2_fw_motion:.3f}",
+        "test2_forward_pc_wait_elapsed_ms": missing if result.test2.forward_elapsed_ms is None else result.test2.forward_elapsed_ms,
+        "test2_forward_post_motion_before_complete_ms": missing if test2_post_motion is None else f"{test2_post_motion:.3f}",
+        "test2_distance_mm": missing if test2_distance is None else f"{test2_distance:.4f}",
+        "test2_moved_steps": missing if test2_moved_steps is None else test2_moved_steps,
+        "test2_expected_ideal_ms": missing if test2_expected_ideal is None else f"{test2_expected_ideal:.3f}",
+        "test2_expected_firmware_model_ms": missing if test2_expected_firmware_model is None else f"{test2_expected_firmware_model:.3f}",
+        "test2_elapsed_error_ms": missing if test2_elapsed_error is None else f"{test2_elapsed_error:.3f}",
+        "test2_elapsed_error_ratio": missing if test2_elapsed_error_ratio is None else f"{test2_elapsed_error_ratio:.6f}",
         "sg_min": missing if sg_stats_disabled or sg.sg_min is None else sg.sg_min,
         "sg_max": missing if sg_stats_disabled or sg.sg_max is None else sg.sg_max,
         "sg_avg": missing if sg_stats_disabled or sg.sg_avg is None else f"{sg.sg_avg:.1f}",
@@ -2022,6 +2195,17 @@ def write_markdown_report(
     lines.append("")
     lines.extend(condition_summary_table(results))
 
+    success_svg_path = report_path.parent / f"success_probability_{timestamp}.svg"
+    success_svg_written = write_success_probability_svg(success_svg_path, results)
+    lines.append("")
+    lines.append("## Success Probability")
+    lines.append("")
+    if success_svg_written:
+        success_svg_rel = relative_link(report_path.parent, success_svg_path)
+        lines.append(f"![Success Probability]({success_svg_rel})")
+        lines.append("")
+    lines.extend(success_probability_table(results))
+
     lines.append("")
     lines.append("## Failure Diagnostics")
     lines.append("")
@@ -2044,6 +2228,17 @@ def write_markdown_report(
         lines.append("## Current Sweep Analysis")
         lines.append("")
         lines.extend(current_sweep_report_section(results))
+
+    velocity_svg_path = report_path.parent / f"velocity_elapsed_{timestamp}.svg"
+    velocity_svg_written = write_velocity_elapsed_svg(velocity_svg_path, results)
+    if velocity_svg_written:
+        velocity_svg_rel = relative_link(report_path.parent, velocity_svg_path)
+        lines.append("")
+        lines.append("## Commanded Speed vs Elapsed")
+        lines.append("")
+        lines.append(f"![Commanded Speed vs Elapsed]({velocity_svg_rel})")
+        lines.append("")
+        lines.extend(velocity_elapsed_table(results))
 
     lines.append("")
     lines.append("## OK/NG Graph")
@@ -2148,6 +2343,204 @@ def best_safe_settings_table(results: list[SweepResult]) -> list[str]:
         ["current_ma", "chop_mode", "microsteps", "accel_mm_s2", "max_pass_speed_mm_s", "recommended_speed_mm_s"],
         rows,
     )
+
+
+def write_velocity_elapsed_svg(path: Path, results: list[SweepResult]) -> bool:
+    series = velocity_elapsed_series(results)
+    points = [point for _label, series_points in series for point in series_points]
+    if not points:
+        return False
+
+    width = 760
+    height = 420
+    left = 76
+    right = 170
+    top = 28
+    bottom = 62
+    plot_width = width - left - right
+    plot_height = height - top - bottom
+
+    min_speed = min(speed for speed, _elapsed in points)
+    max_speed = max(speed for speed, _elapsed in points)
+    min_elapsed = 0
+    max_elapsed = max(elapsed for _speed, elapsed in points)
+    if max_speed <= min_speed:
+        max_speed = min_speed + 1.0
+    if max_elapsed <= min_elapsed:
+        max_elapsed = min_elapsed + 1
+
+    def x_for(speed: float) -> float:
+        return left + (speed - min_speed) / (max_speed - min_speed) * plot_width
+
+    def y_for(elapsed: int) -> float:
+        return top + (max_elapsed - elapsed) / (max_elapsed - min_elapsed) * plot_height
+
+    palette = ["#2563eb", "#dc2626", "#16a34a", "#9333ea", "#ea580c", "#0891b2", "#4f46e5", "#be123c"]
+    series_svg_parts: list[str] = []
+    legend_parts: list[str] = []
+    for index, (label, series_points) in enumerate(series):
+        color = palette[index % len(palette)]
+        polyline = " ".join(f"{x_for(speed):.1f},{y_for(elapsed):.1f}" for speed, elapsed in series_points)
+        series_svg_parts.append(f'  <polyline points="{polyline}" fill="none" stroke="{color}" stroke-width="2.5" />')
+        series_svg_parts.extend(
+            f'  <circle cx="{x_for(speed):.1f}" cy="{y_for(elapsed):.1f}" r="3.5" fill="{color}" />'
+            for speed, elapsed in series_points
+        )
+        legend_y = top + 18 + index * 20
+        legend_parts.append(f'  <line x1="{left + plot_width + 18}" y1="{legend_y}" x2="{left + plot_width + 42}" y2="{legend_y}" stroke="{color}" stroke-width="2.5" />')
+        legend_parts.append(f'  <text x="{left + plot_width + 48}" y="{legend_y + 4}" font-size="11" fill="#111827">{label}</text>')
+    series_svg = "\n".join(series_svg_parts)
+    legend_svg = "\n".join(legend_parts)
+    x_tick_lines = "\n".join(
+        f'  <line x1="{x_for(value):.1f}" y1="{top}" x2="{x_for(value):.1f}" y2="{top + plot_height}" stroke="#e5e7eb" />'
+        f'\n  <text x="{x_for(value):.1f}" y="{height - 36}" text-anchor="middle" font-size="11" fill="#374151">{fmt_num(value)}</text>'
+        for value in svg_ticks(min_speed, max_speed, 6)
+    )
+    y_tick_lines = "\n".join(
+        f'  <line x1="{left}" y1="{y_for(int(round(value))):.1f}" x2="{left + plot_width}" y2="{y_for(int(round(value))):.1f}" stroke="#e5e7eb" />'
+        f'\n  <text x="{left - 10}" y="{y_for(int(round(value))) + 4:.1f}" text-anchor="end" font-size="11" fill="#374151">{fmt_num(value)}</text>'
+        for value in svg_ticks(float(min_elapsed), float(max_elapsed), 6)
+    )
+    svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
+  <rect width="{width}" height="{height}" fill="white" />
+  <text x="{width / 2:.1f}" y="18" text-anchor="middle" font-size="16" font-family="Arial, sans-serif" fill="#111827">Commanded speed vs test2 elapsed</text>
+{x_tick_lines}
+{y_tick_lines}
+  <rect x="{left}" y="{top}" width="{plot_width}" height="{plot_height}" fill="none" stroke="#9ca3af" />
+{series_svg}
+{legend_svg}
+  <text x="{left + plot_width / 2:.1f}" y="{height - 10}" text-anchor="middle" font-size="13" font-family="Arial, sans-serif" fill="#111827">commanded speed_mm_s</text>
+  <text x="18" y="{top + plot_height / 2:.1f}" text-anchor="middle" font-size="13" font-family="Arial, sans-serif" fill="#111827" transform="rotate(-90 18 {top + plot_height / 2:.1f})">elapsed_ms</text>
+</svg>
+'''
+    path.write_text(svg)
+    return True
+
+
+def velocity_elapsed_series(results: list[SweepResult]) -> list[tuple[str, list[tuple[float, int]]]]:
+    groups: dict[tuple[float, int, str, int], list[tuple[float, int]]] = defaultdict(list)
+    for item in results:
+        if item.test2.forward_elapsed_ms is None:
+            continue
+        key = (item.param.accel_mm_s2, item.param.current_ma, item.param.chop_mode, item.param.microsteps)
+        groups[key].append((item.param.speed_mm_s, item.test2.forward_elapsed_ms))
+    series: list[tuple[str, list[tuple[float, int]]]] = []
+    for accel, current, chop, microsteps in sorted(groups):
+        label = f"accel {fmt_num(accel)}"
+        if len({key[1:] for key in groups}) > 1:
+            label += f", {current}mA, {chop}, 1/{microsteps}"
+        series.append((label, sorted(groups[(accel, current, chop, microsteps)], key=lambda point: point[0])))
+    return series
+
+
+def svg_ticks(min_value: float, max_value: float, count: int) -> list[float]:
+    if count <= 1 or max_value <= min_value:
+        return [min_value, max_value]
+    step = (max_value - min_value) / float(count - 1)
+    return [min_value + step * index for index in range(count)]
+
+
+def velocity_elapsed_table(results: list[SweepResult]) -> list[str]:
+    rows = [
+        [fmt_num(item.param.accel_mm_s2), fmt_num(item.param.speed_mm_s), value_or_na(item.test2.forward_elapsed_ms)]
+        for item in sorted(results, key=lambda result: (result.param.accel_mm_s2, result.param.speed_mm_s))
+        if item.test2.forward_elapsed_ms is not None
+    ]
+    return markdown_table(["accel_mm_s2", "speed_mm_s", "test2_forward_elapsed_ms"], rows)
+
+
+def success_probability_groups(results: list[SweepResult]) -> dict[tuple[float, float, int, str, int], list[SweepResult]]:
+    groups: dict[tuple[float, float, int, str, int], list[SweepResult]] = defaultdict(list)
+    for item in results:
+        key = (item.param.accel_mm_s2, item.param.speed_mm_s, item.param.current_ma, item.param.chop_mode, item.param.microsteps)
+        groups[key].append(item)
+    return groups
+
+
+def success_probability_table(results: list[SweepResult]) -> list[str]:
+    rows: list[list[str]] = []
+    for key, items in sorted(success_probability_groups(results).items()):
+        accel, speed, current, chop, microsteps = key
+        pass_count = sum(1 for item in items if item.final_result == "PASS")
+        total = len(items)
+        rate = pass_count / total * 100.0 if total else 0.0
+        rows.append([
+            fmt_num(accel),
+            fmt_num(speed),
+            str(current),
+            chop,
+            str(microsteps),
+            str(pass_count),
+            str(total),
+            f"{rate:.1f}%",
+        ])
+    return markdown_table(["accel_mm_s2", "speed_mm_s", "current_ma", "chop", "microsteps", "PASS", "total", "success_rate"], rows)
+
+
+def write_success_probability_svg(path: Path, results: list[SweepResult]) -> bool:
+    groups = success_probability_groups(results)
+    if not groups:
+        return False
+    speeds = sorted({key[1] for key in groups})
+    accels = sorted({key[0] for key in groups}, reverse=True)
+    if not speeds or not accels:
+        return False
+
+    cell_w = 68
+    cell_h = 32
+    left = 78
+    top = 44
+    right = 24
+    bottom = 56
+    width = left + right + cell_w * len(speeds)
+    height = top + bottom + cell_h * len(accels)
+
+    cells: list[str] = []
+    for row, accel in enumerate(accels):
+        y = top + row * cell_h
+        cells.append(f'  <text x="{left - 10}" y="{y + cell_h / 2 + 4:.1f}" text-anchor="end" font-size="11" fill="#374151">{fmt_num(accel)}</text>')
+        for col, speed in enumerate(speeds):
+            x = left + col * cell_w
+            matching = [
+                item
+                for key, items in groups.items()
+                if key[0] == accel and key[1] == speed
+                for item in items
+            ]
+            total = len(matching)
+            pass_count = sum(1 for item in matching if item.final_result == "PASS")
+            rate = pass_count / total if total else 0.0
+            fill = success_rate_color(rate)
+            cells.append(f'  <rect x="{x}" y="{y}" width="{cell_w}" height="{cell_h}" fill="{fill}" stroke="#ffffff" />')
+            cells.append(f'  <text x="{x + cell_w / 2:.1f}" y="{y + cell_h / 2 + 4:.1f}" text-anchor="middle" font-size="11" fill="#111827">{pass_count}/{total}</text>')
+    x_labels = "\n".join(
+        f'  <text x="{left + col * cell_w + cell_w / 2:.1f}" y="{height - 32}" text-anchor="middle" font-size="11" fill="#374151">{fmt_num(speed)}</text>'
+        for col, speed in enumerate(speeds)
+    )
+    cells_svg = "\n".join(cells)
+    svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">
+  <rect width="{width}" height="{height}" fill="white" />
+  <text x="{width / 2:.1f}" y="20" text-anchor="middle" font-size="16" font-family="Arial, sans-serif" fill="#111827">Success probability by speed and accel</text>
+{x_labels}
+{cells_svg}
+  <text x="{left + cell_w * len(speeds) / 2:.1f}" y="{height - 8}" text-anchor="middle" font-size="13" fill="#111827">speed_mm_s</text>
+  <text x="18" y="{top + cell_h * len(accels) / 2:.1f}" text-anchor="middle" font-size="13" fill="#111827" transform="rotate(-90 18 {top + cell_h * len(accels) / 2:.1f})">accel_mm_s2</text>
+</svg>
+'''
+    path.write_text(svg)
+    return True
+
+
+def success_rate_color(rate: float) -> str:
+    if rate >= 0.999:
+        return "#bbf7d0"
+    if rate >= 0.75:
+        return "#dcfce7"
+    if rate >= 0.5:
+        return "#fef3c7"
+    if rate > 0.0:
+        return "#fed7aa"
+    return "#fecaca"
 
 
 def condition_summary_table(results: list[SweepResult]) -> list[str]:
@@ -2490,6 +2883,7 @@ def b_repro_report_section(results: list[SweepResult]) -> list[str]:
             "reason",
             "error_mm",
             "elapsed_sec",
+            "test2_forward_ms",
             "limit",
             "timing",
             "move_start_limit",
@@ -2512,6 +2906,7 @@ def b_repro_report_section(results: list[SweepResult]) -> list[str]:
                 item.failure_reason,
                 "NA" if item.final_error_mm is None else f"{item.final_error_mm:.4f}",
                 f"{item.elapsed_sec:.3f}",
+                value_or_na(item.test2.forward_elapsed_ms),
                 item.final_limit_state,
                 item.final_limit_timing,
                 value_or_na(item.sg.move_start_limit_state),
@@ -2747,6 +3142,7 @@ def detail_results_table(results: list[SweepResult]) -> list[str]:
             "-" if result.final_error_mm is None else f"{result.final_error_mm:.4f}",
             "-" if result.final_remaining_steps is None else str(result.final_remaining_steps),
             f"{result.elapsed_sec:.1f}",
+            value_or_na(result.test2.forward_elapsed_ms),
         ])
     return markdown_table(
         [
@@ -2765,6 +3161,7 @@ def detail_results_table(results: list[SweepResult]) -> list[str]:
             "error_mm",
             "remaining_steps",
             "elapsed_sec",
+            "test2_forward_ms",
         ],
         rows,
     )

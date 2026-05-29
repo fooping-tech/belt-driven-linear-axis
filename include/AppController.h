@@ -41,6 +41,7 @@ class AppController {
   void printStallGuardStatus();
   void printStallGuardSummary();
   void printMotionTimingSummary();
+  void printMoveTiming(uint32_t targetReachedUs, uint32_t completePrintBeforeUs) const;
   void printRejectDetail(const char* stage, const char* reason);
   void printCurrentStatusCsv(const char* driverStatus);
   void updateHeartbeatAndLoopStats();
@@ -86,6 +87,12 @@ class AppController {
   uint32_t lastHeartbeatToggleMs_ = 0;
   bool heartbeatState_ = false;
   int resetReason_ = 0;
+  uint32_t moveStartedUs_ = 0;
+  float moveCommandDeltaMm_ = 0.0F;
+  float moveCommandSpeedMmS_ = 0.0F;
+  float moveCommandAccelMmS2_ = 0.0F;
+  long moveTargetSteps_ = 0;
+  long moveStartSteps_ = 0;
   HomingController::State lastHomingLogState_ = HomingController::State::Idle;
   String serialLine_;
 };
