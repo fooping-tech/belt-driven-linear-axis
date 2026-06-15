@@ -5,6 +5,7 @@
 
 #include "As5600Sensor.h"
 #include "Axis.h"
+#include "CartPoleBalanceController.h"
 #include "HomingController.h"
 #include "LimitSwitch.h"
 #include "MotionController.h"
@@ -19,6 +20,7 @@ class AppController {
     Homing,
     Ready,
     Moving,
+    Balancing,
     Error,
   };
 
@@ -51,6 +53,10 @@ class AppController {
   void printI2cScan();
   void printI2cBitBangScan();
   void printAs5600Status();
+  void startBalancing();
+  void stopBalancing(CartPoleBalanceController::StopReason reason);
+  void calibrateBalanceDownAngle();
+  void printBalanceStatus();
   void printIoStatus();
   void runI2cPinPulseTest();
   void runMotorStepTest();
@@ -84,6 +90,7 @@ class AppController {
   LimitSwitch limit_;
   As5600Sensor as5600_;
   Axis axis_;
+  CartPoleBalanceController balance_;
   HomingController homing_;
   MotionController motion_;
   State state_ = State::Boot;

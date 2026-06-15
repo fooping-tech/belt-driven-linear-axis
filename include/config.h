@@ -55,7 +55,7 @@ constexpr uint32_t LIMIT_DEBOUNCE_MS = 30;
 constexpr float BELT_PITCH_MM = 2.0F;
 constexpr uint16_t PULLEY_TEETH = 20;
 constexpr uint16_t MOTOR_FULL_STEPS_PER_REV = 200;
-constexpr uint16_t MICROSTEPS = 16;
+constexpr uint16_t MICROSTEPS = 8;
 constexpr float PULLEY_TRAVEL_MM_PER_REV = BELT_PITCH_MM * PULLEY_TEETH;
 constexpr float STEPS_PER_MM = (MOTOR_FULL_STEPS_PER_REV * MICROSTEPS) / PULLEY_TRAVEL_MM_PER_REV;
 constexpr float X_MIN_MM = 0.0F;
@@ -66,8 +66,8 @@ constexpr float X_MAX_TRAVEL_MM = RAIL_LENGTH_MM - CARRIAGE_LENGTH_MM - END_MARG
 constexpr float X_MAX_MM = X_MIN_MM + X_MAX_TRAVEL_MM;
 
 constexpr int HOMING_DIRECTION = -1;
-constexpr float HOMING_FAST_MM_S = 10.0F;
-constexpr float HOMING_SLOW_MM_S = 1.0F;
+constexpr float HOMING_FAST_MM_S = 30.0F;
+constexpr float HOMING_SLOW_MM_S = 3.0F;
 constexpr float HOMING_BACKOFF_MM = 8.0F;
 constexpr float HOMING_MAX_TRAVEL_MM = 80.0F;
 

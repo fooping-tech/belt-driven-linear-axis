@@ -1,0 +1,60 @@
+{
+  "mechanics": {
+    "pulley_teeth": 20,
+    "belt_pitch_m": 0.002,
+    "x_lim_m": 0.16,
+    "soft_margin_m": 0.005
+  },
+  "motor": {
+    "torque_lowspeed_nm": 0.30,
+    "torque_min_nm": 0.10,
+    "v_knee_mps": 1.0,
+    "rotor_inertia_kg_m2": 0.0000057
+  },
+  "stepper_limits": {
+    "v_max_mps": 0.5,
+    "a_max_mps2": 3.0,
+    "stall_threshold_m": 0.004
+  },
+  "stage_pole": {
+    "cart_mass_kg": 0.20,
+    "pole_len_m": 0.30,
+    "rod_mass_kg": 0.045,
+    "tip_mass_kg": 0.020,
+    "hinge_damping_nms": 0.00015,
+    "hinge_frictionloss_nm": 0.0005
+  },
+  "servo": {
+    "kp_n_per_m": 6000.0,
+    "kv_ns_per_m": 90.0
+  },
+  "timing": {
+    "timestep_s": 0.0005,
+    "ctrl_hz": 50.0
+  },
+  "controller": {
+    "k_energy": 20.0,
+    "swing_sat_ratio": 0.7,
+    "deadlock_phidot_rad_s": 0.08,
+    "deadlock_accel_mps2": 0.4,
+    "center_hold_kx": 2.0,
+    "center_hold_kd": 1.0,
+    "catch_phi_rad": 0.30,
+    "catch_phidot_rad_s": 4.0,
+    "release_phi_rad": 0.80,
+    "lqr_gains": [-15.8113883, -15.34361558, -75.08840283, -12.38768137],
+    "lqr_q": [20.0, 2.0, 80.0, 3.0],
+    "lqr_r": 0.08
+  },
+  "real": {
+    "x_min_mm": 0.0,
+    "x_center_mm": 177.5,
+    "angle_down_deg": 0.0,
+    "angle_direction": 1,
+    "angle_filter_alpha": 0.35,
+    "balance_current_ma": 1400,
+    "balance_spreadcycle": true,
+    "balance_log_interval_ms": 100,
+    "max_steps_per_update": 64
+  }
+}

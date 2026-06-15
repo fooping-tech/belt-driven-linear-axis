@@ -208,6 +208,10 @@ Serial コマンド:
 | `io` | ピン割り付けと左リミットスイッチの raw/debounced 状態を表示 |
 | `angle` | AS5600 の現在角度を短い `ANGLE,...` 形式で表示 |
 | `as5600` | AS5600 の I2C 応答、角度、磁石検出状態を詳細表示 |
+| `bal` | 倒立制御の設定、状態、最後の停止理由を表示 |
+| `balzero` | 現在のAS5600角度を振子の真下角としてRAM上に校正 |
+| `balstart` | ホーミング済みの中央付近からスイングアップ + LQR倒立制御を開始 |
+| `balstop` | 倒立制御を停止 |
 | `motortest` | 未ホーミングでも使える低速の STEP/DIR 往復テスト。位置情報には反映しません |
 | `off` | モータ通電OFF。TMC2209は `toff(0)` で出力段を無効化 |
 | `on` | モータ通電ON。TMC2209設定を再適用 |
@@ -235,6 +239,30 @@ Serial コマンド:
 `microstep` を切り替えると `steps/mm` が変わるため、位置保持を信用せず `homed=false` に戻ります。再度 `h` でホーミングしてください。
 `off` 後は位置保持が信用できないため `homed=false` に戻ります。`on` 後に再度 `h` でホーミングしてください。
 現在状態、位置、リミット状態、homed 状態、既定速度、加速度、速度プロファイル、TMC2209の電流、chop mode、microstep、steps/mm は Serial ログで確認できます。
+
+## 倒立振子 sim2real
+
+`../belt_cartpole` のMuJoCoモデルは `sim/belt_cartpole/` に取り込んでいます。
+SIM/実機で共有する設定は `sim_config/belt_cartpole.json` に集約し、Python側は直接JSONを読み、実機側はPlatformIOビルド前に `tools/generate_belt_cartpole_config.py` が生成する `include/generated/BeltCartpoleConfig.h` を読みます。
+
+基本手順:
+
+```text
+h
+m 177.5 50
+balzero
+balstart
+```
+
+`balzero` は振子を真下で静止させた状態で実行してください。倒立制御中は `BALANCE_STATUS` に `mode`、`phi_rad`、`phidot_rad_s`、台車位置、指令位置、指令速度、指令加速度を周期出力します。
+AS5600異常、ソフトリミット、指令位置と実位置の乖離、手動停止では制御を停止します。
+
+SIMの実行例:
+
+```sh
+cd sim/belt_cartpole
+python run.py --controller classic --headless --duration 10
+```
 
 ## 脱調切り分け検証
 
@@ -286,10 +314,9 @@ Serial コマンド:
 | 触れない | 電流を下げる |
 | ドライバが熱停止 | 電流を下げ、放熱を追加する |
 
-1/8 microstepは診断用です。
-1/16では `steps/mm = 80`、60mm/s時は4800step/sです。
-1/8では `steps/mm = 40`、60mm/s時は2400step/sです。
-最終的なペンプロッタ用途では1/16を本命にし、1/8は切り分けとして使います。
+倒立振子ではSTEP周波数の余裕を優先し、1/8 microstepを既定にしています。
+1/8では `steps/mm = 40`、500mm/s時は20000step/sです。
+1/16では `steps/mm = 80`、500mm/s時は40000step/sになるため、脱調やSTEP生成余裕の切り分け用にします。
 
 24V化やモータ変更は最後の検討項目です。
 12Vで高速側のトルクが足りない場合は24V化が効くことがありますが、TMC2209モジュール、電解コンデンサ耐圧、電源容量、放熱を確認してから行ってください。
@@ -453,16 +480,16 @@ python3 tools/plot_step_loss_sweep.py \
 
 ## 機械パラメータ
 
-GT2 20T 前提です。TMC2209 は起動時にUARTで 1/16 microstepへ設定します。
-脱調切り分け時は `microstep 8` で 1/8 に切り替えられます。
+GT2 20T 前提です。TMC2209 は起動時にUARTで 1/8 microstepへ設定します。
+脱調切り分け時は `microstep 16` で 1/16 に切り替えられます。
 
 ```text
 GT2 pitch: 2 mm
 Pulley: 20 teeth
 Travel per rev: 40 mm
 Motor: NEMA17 1.8 deg, 200 full steps/rev
-Microstep: 1/16, 3200 steps/rev
-steps/mm: 3200 / 40 = 80
+Microstep: 1/8, 1600 steps/rev
+steps/mm: 1600 / 40 = 40
 ```
 
 UART接続が失敗するとTMC2209側の既定マイクロステップのまま動くため、Serialログまたは `s` コマンドで `tmc2209_uart=OK` を確認してください。

@@ -7,6 +7,8 @@
 
 #include <esp_system.h>
 
+#include "generated/BeltCartpoleConfig.h"
+
 #if ACTIVE_DRIVER == DRIVER_TMC2209
 #include <TMCStepper.h>
 #endif
@@ -166,6 +168,7 @@ AppController::AppController()
       limit_(PIN_LIMIT_X_MIN, true, true, LIMIT_DEBOUNCE_MS),
       as5600_(PIN_AS5600_SDA, PIN_AS5600_SCL),
       axis_(driver_, &limit_, STEPS_PER_MM, HOMING_DIRECTION),
+      balance_(axis_, as5600_),
       homing_(axis_, kHomingConfig),
       motion_(axis_, DEFAULT_MOVE_SPEED_MM_S) {
   motion_.setAccelerationMmS2(DEFAULT_ACCELERATION_MM_S2);
@@ -185,6 +188,7 @@ void AppController::begin() {
   lastHeartbeatToggleMs_ = millis();
   printResetReason();
   initAs5600();
+  balance_.begin();
 
   initDriverUart();
   driver_.begin();
@@ -355,6 +359,8 @@ void AppController::handleButton() {
       sgCaptureActive = false;
       state_ = State::Ready;
       Serial.println("Move stopped by button");
+    } else if (state_ == State::Balancing) {
+      stopBalancing(CartPoleBalanceController::StopReason::UserStop);
     } else {
       Serial.println("Short press ignored until homing completes");
     }
@@ -384,10 +390,6 @@ void AppController::handleSerial() {
           return;
         case '5':
           startMoveRelative(50.0F);
-          return;
-        case 'b':
-        case 'B':
-          startMoveRelative(-10.0F);
           return;
       }
     }
@@ -452,6 +454,11 @@ void AppController::processSerialLine(const String& line) {
     return;
   }
 
+  if (command == "b") {
+    startMoveRelative(-10.0F);
+    return;
+  }
+
   if (command == "diag") {
     printDiagnosticStatus();
     return;
@@ -474,6 +481,26 @@ void AppController::processSerialLine(const String& line) {
 
   if (command == "as5600bb") {
     printAs5600BitBangStatus();
+    return;
+  }
+
+  if (command == "bal" || command == "balance") {
+    printBalanceStatus();
+    return;
+  }
+
+  if (command == "balstart" || command == "balance start") {
+    startBalancing();
+    return;
+  }
+
+  if (command == "balstop" || command == "balance stop") {
+    stopBalancing(CartPoleBalanceController::StopReason::UserStop);
+    return;
+  }
+
+  if (command == "balzero" || command == "balance zero") {
+    calibrateBalanceDownAngle();
     return;
   }
 
@@ -584,7 +611,7 @@ void AppController::processSerialLine(const String& line) {
     String args = trimmed.substring(7);
     args.trim();
     args.toLowerCase();
-    if (state_ == State::Moving || state_ == State::Homing) {
+    if (state_ == State::Moving || state_ == State::Homing || state_ == State::Balancing) {
       Serial.printf("Profile rejected: state=%s\n", stateName());
       return;
     }
@@ -610,7 +637,7 @@ void AppController::processSerialLine(const String& line) {
                     TEST_ACCEL_MAX_MM_S2);
       return;
     }
-    if (state_ == State::Moving || state_ == State::Homing) {
+    if (state_ == State::Moving || state_ == State::Homing || state_ == State::Balancing) {
       Serial.printf("Acceleration rejected: state=%s\n", stateName());
       return;
     }
@@ -693,7 +720,7 @@ void AppController::processSerialLine(const String& line) {
     return;
   }
 
-  Serial.printf("Unknown command '%s'. Use h, 1, 5, b, s, diag, io, angle, as5600, as5600bb, i2cscan, i2cscanbb, i2cpins, motortest, on, off, v <mm/s>, a <mm/s2>, profile trap|direct, i <mA>, mode stealth|spread, microstep 16|8, m <mm> [mm/s], sg, mt, tmcv, sgreset, sgthrs <0-255>, tcool <0-1048575>, sgen <0|1>, sglog <0|1>, or sgint <ms>.\n", trimmed.c_str());
+  Serial.printf("Unknown command '%s'. Use h, 1, 5, b, s, diag, io, angle, as5600, as5600bb, bal, balzero, balstart, balstop, i2cscan, i2cscanbb, i2cpins, motortest, on, off, v <mm/s>, a <mm/s2>, profile trap|direct, i <mA>, mode stealth|spread, microstep 16|8, m <mm> [mm/s], sg, mt, tmcv, sgreset, sgthrs <0-255>, tcool <0-1048575>, sgen <0|1>, sglog <0|1>, or sgint <ms>.\n", trimmed.c_str());
 }
 
 bool AppController::parseSpeedCommand(const String& line, float& speedMmS) const {
@@ -991,6 +1018,9 @@ void AppController::printMoveUsage() const {
 
 void AppController::setMotorPower(bool enabled) {
   motion_.stop();
+  if (balance_.isActive()) {
+    balance_.stop(CartPoleBalanceController::StopReason::UserStop);
+  }
   sgCaptureActive = false;
   motion_.resetTimingStats();
   if (state_ == State::Homing) {
@@ -1022,7 +1052,7 @@ void AppController::setMotorPower(bool enabled) {
 }
 
 void AppController::setRuntimeCurrent(uint16_t currentMa) {
-  if (state_ == State::Moving || state_ == State::Homing) {
+  if (state_ == State::Moving || state_ == State::Homing || state_ == State::Balancing) {
     printRejectDetail("current_set", "state_busy");
     printCurrentStatusCsv("REJECTED_STATE");
     Serial.printf("Current rejected: state=%s\n", stateName());
@@ -1069,7 +1099,7 @@ void AppController::setRuntimeCurrent(uint16_t currentMa) {
 }
 
 void AppController::setChopMode(bool spreadCycle) {
-  if (state_ == State::Moving || state_ == State::Homing) {
+  if (state_ == State::Moving || state_ == State::Homing || state_ == State::Balancing) {
     Serial.printf("Chop mode rejected: state=%s\n", stateName());
     return;
   }
@@ -1092,7 +1122,7 @@ void AppController::setChopMode(bool spreadCycle) {
 }
 
 void AppController::setMicrosteps(uint16_t microsteps) {
-  if (state_ == State::Moving || state_ == State::Homing) {
+  if (state_ == State::Moving || state_ == State::Homing || state_ == State::Balancing) {
     Serial.printf("Microstep rejected: state=%s\n", stateName());
     return;
   }
@@ -1605,7 +1635,7 @@ void AppController::startHoming() {
   }
 #endif
 
-  if (state_ == State::Homing || state_ == State::Moving) {
+  if (state_ == State::Homing || state_ == State::Moving || state_ == State::Balancing) {
     Serial.printf("Cannot start homing while state=%s\n", stateName());
     return;
   }
@@ -1756,6 +1786,15 @@ void AppController::updateState() {
       }
       break;
 
+    case State::Balancing:
+      balance_.update();
+      if (!balance_.isActive()) {
+        state_ = balance_.stopReason() == CartPoleBalanceController::StopReason::UserStop ? State::Ready : State::Error;
+        printBalanceStatus();
+        printStatus();
+      }
+      break;
+
     case State::Error:
       break;
   }
@@ -1783,6 +1822,7 @@ void AppController::printStatus() {
                 motorPowerEnabled_ ? "ON" : "OFF",
                 driver_.isEnabled() ? "true" : "false");
   printLoopDiagnostics();
+  balance_.printStatus();
 #if ACTIVE_DRIVER == DRIVER_TMC2209
   Serial.printf("tmc2209_uart=%s test_connection=%u microsteps=1/%u stepsPerMm=%.2f runtimeCurrent=%u mA chopMode=%s\n",
                 tmcUartOk ? "OK" : "FAIL",
@@ -1891,6 +1931,53 @@ void AppController::printAs5600Status() {
                 reading.magnitudeOk ? reading.magnitude : 0);
 }
 
+void AppController::startBalancing() {
+  if (!motorPowerEnabled_) {
+    Serial.println("BALANCE,rejected=1,reason=motor_power_off");
+    return;
+  }
+  if (state_ != State::Ready) {
+    Serial.printf("BALANCE,rejected=1,reason=state_not_ready,state=%s\n", stateName());
+    return;
+  }
+  motion_.stop();
+  sgCaptureActive = false;
+#if ACTIVE_DRIVER == DRIVER_TMC2209
+  setRuntimeCurrent(static_cast<uint16_t>(BeltCartpoleConfig::kBalanceCurrentMa));
+  setChopMode(BeltCartpoleConfig::kBalanceSpreadCycle);
+#endif
+  if (balance_.start()) {
+    state_ = State::Balancing;
+  }
+}
+
+void AppController::stopBalancing(CartPoleBalanceController::StopReason reason) {
+  if (!balance_.isActive()) {
+    Serial.println("BALANCE,stop_ignored=1,reason=not_active");
+    return;
+  }
+  balance_.stop(reason);
+  state_ = axis_.isHomed() ? State::Ready : State::NotHomed;
+  printBalanceStatus();
+}
+
+void AppController::calibrateBalanceDownAngle() {
+  if (state_ == State::Moving || state_ == State::Homing || state_ == State::Balancing) {
+    Serial.printf("BALANCE_ZERO,rejected=1,reason=busy,state=%s\n", stateName());
+    return;
+  }
+  const As5600Sensor::Reading reading = as5600_.read();
+  if (!reading.ok) {
+    Serial.println("BALANCE_ZERO,rejected=1,reason=as5600_read_failed");
+    return;
+  }
+  balance_.calibrateDownAngle(reading.angleDegrees);
+}
+
+void AppController::printBalanceStatus() {
+  balance_.printStatus();
+}
+
 void AppController::printIoStatus() {
   Serial.printf("IO,limit_pin=GPIO%d,limit_raw=%s,limit_debounced=%s,heartbeat_enabled=%u,heartbeat_pin=%d,as5600_sda=GPIO%u,as5600_scl=GPIO%u,step_pin=GPIO%d,dir_pin=GPIO%d,tmc_rx=GPIO%u,tmc_tx=GPIO%u\n",
                 PIN_LIMIT_X_MIN,
@@ -1907,7 +1994,7 @@ void AppController::printIoStatus() {
 }
 
 void AppController::runI2cPinPulseTest() {
-  if (state_ == State::Moving || state_ == State::Homing) {
+  if (state_ == State::Moving || state_ == State::Homing || state_ == State::Balancing) {
     Serial.printf("I2C_PIN_TEST,rejected=1,reason=busy,state=%s\n", stateName());
     return;
   }
@@ -1933,7 +2020,7 @@ void AppController::runI2cPinPulseTest() {
 }
 
 void AppController::runMotorStepTest() {
-  if (state_ == State::Moving || state_ == State::Homing) {
+  if (state_ == State::Moving || state_ == State::Homing || state_ == State::Balancing) {
     Serial.printf("MOTOR_TEST,rejected=1,reason=busy,state=%s\n", stateName());
     return;
   }
@@ -2051,6 +2138,8 @@ const char* AppController::stateName() const {
       return "Ready";
     case State::Moving:
       return "Moving";
+    case State::Balancing:
+      return "Balancing";
     case State::Error:
       return "Error";
   }
