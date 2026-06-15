@@ -1,6 +1,7 @@
 .pio
 .venv/
 reports/
+captures/
 __pycache__/
 *.py[cod]
 *$py.class

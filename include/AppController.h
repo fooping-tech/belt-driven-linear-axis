@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <M5Unified.h>
 
+#include "As5600Sensor.h"
 #include "Axis.h"
 #include "HomingController.h"
 #include "LimitSwitch.h"
@@ -44,6 +45,15 @@ class AppController {
   void printMoveTiming(uint32_t targetReachedUs, uint32_t completePrintBeforeUs) const;
   void printRejectDetail(const char* stage, const char* reason);
   void printCurrentStatusCsv(const char* driverStatus);
+  void initAs5600();
+  void printAs5600Angle();
+  void printAs5600BitBangStatus();
+  void printI2cScan();
+  void printI2cBitBangScan();
+  void printAs5600Status();
+  void printIoStatus();
+  void runI2cPinPulseTest();
+  void runMotorStepTest();
   void updateHeartbeatAndLoopStats();
   void printLoopDiagnostics() const;
   void printResetReason() const;
@@ -72,6 +82,7 @@ class AppController {
 
   StepDirDriver driver_;
   LimitSwitch limit_;
+  As5600Sensor as5600_;
   Axis axis_;
   HomingController homing_;
   MotionController motion_;

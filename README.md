@@ -39,6 +39,8 @@ GPIO 操作は `StepDirDriver` と `LimitSwitch` に閉じ込め、ホーミン�
 
 ## 配線
 
+倒立振子用の現在の割り付けです。レール長は 400 mm として設定しています。
+
 ```text
 ATOM S3                         TMC2209
 
@@ -56,6 +58,17 @@ G2 / RX ----------------------  PDN_UART
 
 モータ コイルA ---------------  OUT1A / OUT1B
 モータ コイルB ---------------  OUT2A / OUT2B
+
+ATOM S3                         AS5600
+
+3V3   ------------------------  VCC
+GND   ------------------------  GND
+G38   ------------------------  SDA
+G39   ------------------------  SCL
+
+ATOM S3
+
+G7    ---- Left limit switch ---- GND
 ```
 
 | ATOM S3 | TMC2209 |
@@ -66,6 +79,13 @@ G2 / RX ----------------------  PDN_UART
 | G2 / GPIO2 | UART RX <- PDN_UART |
 | GND | GND |
 
+| ATOM S3 | AS5600 |
+| --- | --- |
+| 3V3 | VCC |
+| GND | GND |
+| G38 / GPIO38 | SDA |
+| G39 / GPIO39 | SCL |
+
 ATOM S3 と TMC2209 の GND は必ず共通にしてください。
 通電中にモータ線を抜かないでください。
 
@@ -74,11 +94,11 @@ ATOM S3 と TMC2209 の GND は必ず共通にしてください。
 
 ## リミットスイッチ
 
-標準設定では X-min リミットスイッチを `GPIO8` に接続します。
+標準設定では左側の X-min リミットスイッチを `GPIO7` に接続します。
 `include/config.h` の `PIN_LIMIT_X_MIN` で変更できます。
 
 ```text
-ATOM S3 GPIO8 ---- リミットスイッチ ---- GND
+ATOM S3 GPIO7 ---- Left limit switch ---- GND
 ```
 
 入力は active-low + `INPUT_PULLUP` です。
@@ -86,9 +106,8 @@ ATOM S3 GPIO8 ---- リミットスイッチ ---- GND
 
 ## ハートビートGPIO
 
-`include/config.h` の `HEARTBEAT_ENABLED = true` のとき、`GPIO7` をメインループのハートビートとして約10ms周期でトグルします。
-TO発生時にGPIO7が止まる場合はESP32メインループ停止、リセット、電源、Watchdog、USB CDC側を疑います。
-GPIO7が動き続ける場合はSerial応答待ち、状態機械、MotionController、TMC2209、機械側を優先して切り分けます。
+現在の倒立振子用割り付けでは `GPIO7` を左リミットスイッチに使うため、`include/config.h` の `HEARTBEAT_ENABLED = false` としています。
+ハートビートGPIOを使う場合は、リミットスイッチや AS5600 I2C と衝突しない未使用GPIOを `PIN_HEARTBEAT` に設定してください。
 
 起動時には `esp_reset_reason()` の結果を `reset_reason=POWERON` のようにSerialへ出します。
 `s` と `mt` には `heartbeat_enabled`、`heartbeat_pin`、`last_loop_gap_us`、`max_loop_gap_us`、`reset_reason` を追加で出します。
@@ -156,12 +175,12 @@ Homing state: Done pos=0.00mm steps=0 limit=ON
 `X_MAX_MM` はレール長、キャリッジ長、終端マージンから計算します。
 
 ```text
-RAIL_LENGTH_MM = 100.0
+RAIL_LENGTH_MM = 400.0
 CARRIAGE_LENGTH_MM = 40.0
 END_MARGIN_MM = 5.0
-X_MAX_TRAVEL_MM = 100.0 - 40.0 - 5.0 = 55.0
+X_MAX_TRAVEL_MM = 400.0 - 40.0 - 5.0 = 355.0
 X_MIN_MM = 0.0
-X_MAX_MM = 55.0
+X_MAX_MM = 355.0
 ```
 
 home 完了前の通常移動は禁止です。
@@ -186,6 +205,10 @@ Serial コマンド:
 | `b` | -10 mm 移動 |
 | `s` | status 表示 |
 | `diag` | 軽量診断。TMC UARTとDisplayに触らず、状態、STEP、停止理由だけを短く表示 |
+| `io` | ピン割り付けと左リミットスイッチの raw/debounced 状態を表示 |
+| `angle` | AS5600 の現在角度を短い `ANGLE,...` 形式で表示 |
+| `as5600` | AS5600 の I2C 応答、角度、磁石検出状態を詳細表示 |
+| `motortest` | 未ホーミングでも使える低速の STEP/DIR 往復テスト。位置情報には反映しません |
 | `off` | モータ通電OFF。TMC2209は `toff(0)` で出力段を無効化 |
 | `on` | モータ通電ON。TMC2209設定を再適用 |
 | `v <mm/s>` | 通常移動の既定速度を変更。`speed <mm/s>` も使用可能 |
@@ -310,7 +333,7 @@ Serialログが一定時間途切れた場合は、軽量な `diag` probeを送�
 
 ```text
 [probe] phase=test2:return:b:2 command=b no_serial_for=1000ms
-DIAG,app_state=Moving,homing_state=Idle,motion_state=Moving,current_position_steps=1200,target_steps=0,remaining_steps=1200,limit_raw=OFF,limit_debounced=OFF,motion_current_speed_steps_s=2400.00,motion_step_interval_us=416,motion_last_step_us=123456789,now_us=123457000,last_step_pulse_us=123456789,step_pulse_count=3456,last_no_step_reason=STEP_DUE_WAIT,motion_no_step_reason=STEP_DUE_WAIT,homing_no_step_reason=IDLE,last_move_reject_reason=NONE,heartbeat_enabled=1,max_loop_gap_us=850,max_motion_update_gap_us=620
+DIAG,app_state=Moving,homing_state=Idle,motion_state=Moving,current_position_steps=1200,target_steps=0,remaining_steps=1200,limit_raw=OFF,limit_debounced=OFF,motion_current_speed_steps_s=2400.00,motion_step_interval_us=416,motion_last_step_us=123456789,now_us=123457000,last_step_pulse_us=123456789,step_pulse_count=3456,last_no_step_reason=STEP_DUE_WAIT,motion_no_step_reason=STEP_DUE_WAIT,homing_no_step_reason=IDLE,last_move_reject_reason=NONE,heartbeat_enabled=0,max_loop_gap_us=850,max_motion_update_gap_us=620
 ```
 
 Markdownレポートの `TO Diagnostic Logs` には、TO直前のSerialログ末尾、`diag` / `s` / `mt` probe応答がTO時だけ出ます。

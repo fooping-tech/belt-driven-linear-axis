@@ -164,6 +164,7 @@ void printTmc2209CurrentStatus(const char* label) {
 AppController::AppController()
     : driver_(PIN_STEP, PIN_DIR, PIN_EN, STEP_PULSE_US, DIR_INVERTED),
       limit_(PIN_LIMIT_X_MIN, true, true, LIMIT_DEBOUNCE_MS),
+      as5600_(PIN_AS5600_SDA, PIN_AS5600_SCL),
       axis_(driver_, &limit_, STEPS_PER_MM, HOMING_DIRECTION),
       homing_(axis_, kHomingConfig),
       motion_(axis_, DEFAULT_MOVE_SPEED_MM_S) {
@@ -183,6 +184,7 @@ void AppController::begin() {
   lastLoopTickUs_ = micros();
   lastHeartbeatToggleMs_ = millis();
   printResetReason();
+  initAs5600();
 
   initDriverUart();
   driver_.begin();
@@ -455,6 +457,46 @@ void AppController::processSerialLine(const String& line) {
     return;
   }
 
+  if (command == "io") {
+    printIoStatus();
+    return;
+  }
+
+  if (command == "as5600") {
+    printAs5600Status();
+    return;
+  }
+
+  if (command == "angle") {
+    printAs5600Angle();
+    return;
+  }
+
+  if (command == "as5600bb") {
+    printAs5600BitBangStatus();
+    return;
+  }
+
+  if (command == "i2cscan") {
+    printI2cScan();
+    return;
+  }
+
+  if (command == "i2cscanbb") {
+    printI2cBitBangScan();
+    return;
+  }
+
+  if (command == "i2cpins") {
+    runI2cPinPulseTest();
+    return;
+  }
+
+  if (command == "motortest") {
+    runMotorStepTest();
+    return;
+  }
+
   if (command == "sg") {
     printStallGuardStatus();
     return;
@@ -651,7 +693,7 @@ void AppController::processSerialLine(const String& line) {
     return;
   }
 
-  Serial.printf("Unknown command '%s'. Use h, 1, 5, b, s, diag, on, off, v <mm/s>, a <mm/s2>, profile trap|direct, i <mA>, mode stealth|spread, microstep 16|8, m <mm> [mm/s], sg, mt, tmcv, sgreset, sgthrs <0-255>, tcool <0-1048575>, sgen <0|1>, sglog <0|1>, or sgint <ms>.\n", trimmed.c_str());
+  Serial.printf("Unknown command '%s'. Use h, 1, 5, b, s, diag, io, angle, as5600, as5600bb, i2cscan, i2cscanbb, i2cpins, motortest, on, off, v <mm/s>, a <mm/s2>, profile trap|direct, i <mA>, mode stealth|spread, microstep 16|8, m <mm> [mm/s], sg, mt, tmcv, sgreset, sgthrs <0-255>, tcool <0-1048575>, sgen <0|1>, sglog <0|1>, or sgint <ms>.\n", trimmed.c_str());
 }
 
 bool AppController::parseSpeedCommand(const String& line, float& speedMmS) const {
@@ -1768,6 +1810,183 @@ void AppController::printStatus() {
                 TMC_TPOWERDOWN,
                 TmcDriver.IFCNT());
 #endif
+}
+
+void AppController::initAs5600() {
+  as5600_.begin();
+  Serial.printf("AS5600 I2C initialized: sda=GPIO%u scl=GPIO%u address=0x%02X\n",
+                as5600_.sdaPin(),
+                as5600_.sclPin(),
+                as5600_.address());
+}
+
+void AppController::printAs5600BitBangStatus() {
+  const As5600Sensor::BitBangReading reading = as5600_.readBitBang();
+  Serial.printf("AS5600BB,ok=%u,status_ok=%u,status_ack_mask=0x%02X,status=0x%02X,raw_ok=%u,raw_ack_mask=0x%02X,raw=%u,raw_deg=%.2f,scl=GPIO%u,sda=GPIO%u\n",
+                reading.ok ? 1 : 0,
+                reading.statusOk ? 1 : 0,
+                reading.statusAckMask,
+                reading.statusOk ? reading.status : 0,
+                reading.rawOk ? 1 : 0,
+                reading.rawAckMask,
+                reading.rawOk ? reading.rawAngle : 0,
+                reading.rawDegrees,
+                as5600_.sclPin(),
+                as5600_.sdaPin());
+}
+
+void AppController::printI2cScan() {
+  uint8_t addresses[16] = {};
+  Serial.printf("I2C_SCAN,start,mode=wire,sda=GPIO%u,scl=GPIO%u\n", as5600_.sdaPin(), as5600_.sclPin());
+  const uint8_t count = as5600_.scanWire(addresses, sizeof(addresses));
+  const uint8_t printedCount = count < sizeof(addresses) ? count : sizeof(addresses);
+  for (uint8_t index = 0; index < printedCount; ++index) {
+    Serial.printf("I2C_SCAN,found=1,address=0x%02X\n", addresses[index]);
+  }
+  Serial.printf("I2C_SCAN,done,mode=wire,count=%u\n", count);
+}
+
+void AppController::printI2cBitBangScan() {
+  uint8_t addresses[16] = {};
+  Serial.printf("I2C_SCAN,start,mode=bitbang,sda=GPIO%u,scl=GPIO%u\n", as5600_.sdaPin(), as5600_.sclPin());
+  const uint8_t count = as5600_.scanBitBang(addresses, sizeof(addresses));
+  const uint8_t printedCount = count < sizeof(addresses) ? count : sizeof(addresses);
+  for (uint8_t index = 0; index < printedCount; ++index) {
+    Serial.printf("I2C_SCAN,found=1,address=0x%02X\n", addresses[index]);
+  }
+  Serial.printf("I2C_SCAN,done,mode=bitbang,count=%u\n", count);
+}
+
+void AppController::printAs5600Angle() {
+  const As5600Sensor::Reading reading = as5600_.read();
+  Serial.printf("ANGLE,ok=%u,angle_deg=%.2f,angle_raw=%u,raw_deg=%.2f,raw=%u,magnet=%u,weak=%u,strong=%u,magnitude=%u,status=0x%02X\n",
+                reading.ok ? 1 : 0,
+                reading.angleDegrees,
+                reading.angleOk ? reading.angle : 0,
+                reading.rawDegrees,
+                reading.rawOk ? reading.rawAngle : 0,
+                reading.statusOk && As5600Sensor::magnetDetected(reading.status) ? 1 : 0,
+                reading.statusOk && As5600Sensor::magnetTooWeak(reading.status) ? 1 : 0,
+                reading.statusOk && As5600Sensor::magnetTooStrong(reading.status) ? 1 : 0,
+                reading.magnitudeOk ? reading.magnitude : 0,
+                reading.statusOk ? reading.status : 0);
+}
+
+void AppController::printAs5600Status() {
+  const As5600Sensor::Reading reading = as5600_.read();
+  Serial.printf("AS5600,ok=%u,sda=GPIO%u,scl=GPIO%u,address=0x%02X,status=0x%02X,magnet_detected=%u,magnet_too_weak=%u,magnet_too_strong=%u,raw=%u,raw_deg=%.2f,angle=%u,angle_deg=%.2f,agc=%u,magnitude=%u\n",
+                reading.ok ? 1 : 0,
+                as5600_.sdaPin(),
+                as5600_.sclPin(),
+                as5600_.address(),
+                reading.statusOk ? reading.status : 0,
+                reading.statusOk && As5600Sensor::magnetDetected(reading.status) ? 1 : 0,
+                reading.statusOk && As5600Sensor::magnetTooWeak(reading.status) ? 1 : 0,
+                reading.statusOk && As5600Sensor::magnetTooStrong(reading.status) ? 1 : 0,
+                reading.rawOk ? reading.rawAngle : 0,
+                reading.rawDegrees,
+                reading.angleOk ? reading.angle : 0,
+                reading.angleDegrees,
+                reading.agcOk ? reading.agc : 0,
+                reading.magnitudeOk ? reading.magnitude : 0);
+}
+
+void AppController::printIoStatus() {
+  Serial.printf("IO,limit_pin=GPIO%d,limit_raw=%s,limit_debounced=%s,heartbeat_enabled=%u,heartbeat_pin=%d,as5600_sda=GPIO%u,as5600_scl=GPIO%u,step_pin=GPIO%d,dir_pin=GPIO%d,tmc_rx=GPIO%u,tmc_tx=GPIO%u\n",
+                PIN_LIMIT_X_MIN,
+                limit_.isPressedRaw() ? "ON" : "OFF",
+                limit_.isPressedDebounced() ? "ON" : "OFF",
+                HEARTBEAT_ENABLED ? 1 : 0,
+                PIN_HEARTBEAT,
+                as5600_.sdaPin(),
+                as5600_.sclPin(),
+                PIN_STEP,
+                PIN_DIR,
+                TMC_UART_RX_PIN,
+                TMC_UART_TX_PIN);
+}
+
+void AppController::runI2cPinPulseTest() {
+  if (state_ == State::Moving || state_ == State::Homing) {
+    Serial.printf("I2C_PIN_TEST,rejected=1,reason=busy,state=%s\n", stateName());
+    return;
+  }
+
+  const As5600Sensor::PinPulseResult result = as5600_.runPinPulseTest();
+  Serial.printf("I2C_PIN_TEST,start,scl=GPIO%u,sda=GPIO%u,scl_initial=%u,sda_initial=%u\n",
+                as5600_.sclPin(),
+                as5600_.sdaPin(),
+                result.sclInitial,
+                result.sdaInitial);
+  Serial.printf("I2C_PIN_TEST,scl_low_read=%u,sda_read=%u\n",
+                result.sclLowRead,
+                result.sdaWhileSclLowRead);
+  Serial.printf("I2C_PIN_TEST,scl_released_read=%u,sda_read=%u\n",
+                result.sclReleasedRead,
+                result.sdaAfterSclReleaseRead);
+  Serial.printf("I2C_PIN_TEST,scl_read=%u,sda_low_read=%u\n",
+                result.sclWhileSdaLowRead,
+                result.sdaLowRead);
+  Serial.printf("I2C_PIN_TEST,end,scl_final=%u,sda_final=%u\n",
+                result.sclFinal,
+                result.sdaFinal);
+}
+
+void AppController::runMotorStepTest() {
+  if (state_ == State::Moving || state_ == State::Homing) {
+    Serial.printf("MOTOR_TEST,rejected=1,reason=busy,state=%s\n", stateName());
+    return;
+  }
+  if (!motorPowerEnabled_) {
+    Serial.println("MOTOR_TEST,rejected=1,reason=motor_power_off");
+    return;
+  }
+
+  constexpr uint16_t testSteps = 80;
+  constexpr uint32_t stepIntervalUs = 2500;
+  const bool limitInitiallyPressed = limit_.isPressedDebounced();
+  bool firstDirectionPositive = HOMING_DIRECTION < 0;
+  if (!limitInitiallyPressed) {
+    firstDirectionPositive = !firstDirectionPositive;
+  }
+
+  Serial.printf("MOTOR_TEST,start,steps_each_way=%u,step_interval_us=%lu,first_dir=%s,limit_start=%s\n",
+                testSteps,
+                static_cast<unsigned long>(stepIntervalUs),
+                firstDirectionPositive ? "positive" : "negative",
+                limitInitiallyPressed ? "ON" : "OFF");
+
+  for (uint8_t pass = 0; pass < 2; ++pass) {
+    const bool directionPositive = pass == 0 ? firstDirectionPositive : !firstDirectionPositive;
+    driver_.setDirection(directionPositive);
+    delayMicroseconds(10);
+    uint16_t completedSteps = 0;
+
+    for (; completedSteps < testSteps; ++completedSteps) {
+      const bool movingTowardLimit = (HOMING_DIRECTION < 0 && !directionPositive)
+                                     || (HOMING_DIRECTION > 0 && directionPositive);
+      if (movingTowardLimit && limit_.isPressedDebounced()) {
+        Serial.printf("MOTOR_TEST,pass=%u,stopped=1,reason=limit,steps=%u,dir=%s\n",
+                      pass + 1,
+                      completedSteps,
+                      directionPositive ? "positive" : "negative");
+        break;
+      }
+      driver_.stepPulse();
+      delayMicroseconds(stepIntervalUs);
+    }
+
+    Serial.printf("MOTOR_TEST,pass=%u,dir=%s,steps=%u,limit=%s\n",
+                  pass + 1,
+                  directionPositive ? "positive" : "negative",
+                  completedSteps,
+                  limit_.isPressedDebounced() ? "ON" : "OFF");
+    delay(100);
+  }
+
+  Serial.printf("MOTOR_TEST,done,step_pulse_count=%lu,limit_end=%s\n",
+                static_cast<unsigned long>(driver_.stepPulseCount()),
+                limit_.isPressedDebounced() ? "ON" : "OFF");
 }
 
 void AppController::printDiagnosticStatus() {
