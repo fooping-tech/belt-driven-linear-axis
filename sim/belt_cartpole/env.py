@@ -104,10 +104,10 @@ class BeltCartPoleSim:
             # ctrl = x_cmd + (kv/kp)*v_cmd として F = kp(x_cmd-x) + kv(v_cmd-xd) を実現。
             # これが無いと定速走行時に kv*v/kp (~10 mm @0.7 m/s) の偽の追従遅れが出る。
             self.data.ctrl[self._aid] = (
-                x_cmd + (p.servo_kv / p.servo_kp) * self.stepper.cmd_vel)
+                x_cmd + (p.servo_kv / p.servo_kp) * self.stepper.issued_vel)
             mujoco.mj_step(self.model, self.data)
-        # 脱調判定: 指令と実位置の乖離 (実機ならステップ抜け)
-        if abs(self.stepper.cmd_pos - self.data.qpos[0]) > p.stall_threshold:
+        # 脱調判定: 発行済みSTEP位置と実位置の乖離 (実機ならステップ抜け)
+        if abs(self.stepper.issued_pos - self.data.qpos[0]) > p.stall_threshold:
             self.stalled = True
         return self.state()
 
@@ -124,6 +124,9 @@ class BeltCartPoleSim:
             "phidot": thd,
             "cmd_pos": self.stepper.cmd_pos,
             "cmd_vel": self.stepper.cmd_vel,
+            "issued_pos": self.stepper.issued_pos,
+            "issued_vel": self.stepper.issued_vel,
+            "cmd_lag": self.stepper.cmd_pos - self.stepper.issued_pos,
             "stalled": self.stalled,
         }
 

@@ -6,6 +6,7 @@
   - 制御入力は「指令加速度 a_cmd」(RL/古典制御の出力)
   - 内部で指令速度 v_cmd を積分: |v_cmd| <= v_max, |dv/dt| <= a_max
   - 指令位置 x_cmd を積分: レール可動域でクランプ
+  - 発行済みSTEP位置 x_issued が有限速度で x_cmd に追従する
   - 端に最大減速度で止まれない速度では自動的にフルブレーキ
     (実機ファームのソフトリミットに相当)
   - x_cmd は MuJoCo の高剛性位置サーボ (推力上限つき) に渡される。
@@ -27,6 +28,8 @@ class StepperDriver:
     def reset(self, pos: float = 0.0):
         self.cmd_pos = float(pos)
         self.cmd_vel = 0.0
+        self.issued_pos = float(pos)
+        self.issued_vel = 0.0
         self.saturated_v = False   # 直前ステップで速度制限に当たったか
         self.braking = False       # 端ブレーキ中か
 
@@ -62,10 +65,26 @@ class StepperDriver:
 
         self.cmd_vel = v_new
         self.cmd_pos = x_new
-        return x_new
+
+        # Firmware-like layer: the continuous balance command can lead the
+        # already-issued step position. This lag is logged as cmd_lag_m on real
+        # hardware and is a major sim2real target.
+        error = self.cmd_pos - self.issued_pos
+        max_delta = max(0.0, p.issued_v_max) * dt
+        if abs(error) <= max_delta or max_delta <= 0.0:
+            issued_delta = error
+        else:
+            issued_delta = np.sign(error) * max_delta
+        self.issued_pos += issued_delta
+
+        if p.issued_step_m > 0.0:
+            self.issued_pos = round(self.issued_pos / p.issued_step_m) * p.issued_step_m
+        self.issued_pos = float(np.clip(self.issued_pos, -p.x_lim, p.x_lim))
+        self.issued_vel = issued_delta / dt if dt > 0.0 else 0.0
+        return self.issued_pos
 
     def available_force(self) -> float:
         """トルク-速度特性: 速度が上がるほど実効推力が落ちる (直線近似)。"""
         p = self.p
-        f = p.force_lowspeed * (1.0 - abs(self.cmd_vel) / p.v_knee)
+        f = p.force_lowspeed * (1.0 - abs(self.issued_vel) / p.v_knee)
         return float(max(p.force_min, f))

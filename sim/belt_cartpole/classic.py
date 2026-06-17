@@ -36,8 +36,10 @@ class HybridController:
                  q=None, r: float | None = None):
         self.p = p
         cfg = _load_shared_config()["controller"]
+        use_configured_gains = q is None and r is None
         if k_energy is None:
             k_energy = float(cfg["k_energy"])
+        configured_gains = cfg.get("lqr_gains")
         if q is None:
             q = tuple(float(v) for v in cfg["lqr_q"])
         if r is None:
@@ -47,21 +49,35 @@ class HybridController:
         alpha = m * lc / J
 
         # ---- LQR ゲイン ----
-        A = np.array([[0, 1, 0, 0],
-                      [0, 0, 0, 0],
-                      [0, 0, 0, 1],
-                      [0, 0, G * alpha, -b / J]])
-        B = np.array([[0.0], [1.0], [0.0], [-alpha]])
-        Q = np.diag(q)
-        R = np.array([[r]])
-        P = solve_continuous_are(A, B, Q, R)
-        self.K = (np.linalg.solve(R, B.T @ P)).ravel()   # a = -K @ [x,xd,phi,phid]
+        if configured_gains and use_configured_gains:
+            self.K = np.array([float(v) for v in configured_gains])
+        else:
+            A = np.array([[0, 1, 0, 0],
+                          [0, 0, 0, 0],
+                          [0, 0, 0, 1],
+                          [0, 0, G * alpha, -b / J]])
+            B = np.array([[0.0], [1.0], [0.0], [-alpha]])
+            Q = np.diag(q)
+            R = np.array([[r]])
+            P = solve_continuous_are(A, B, Q, R)
+            self.K = (np.linalg.solve(R, B.T @ P)).ravel()   # a = -K @ [x,xd,phi,phid]
 
         # ---- スイングアップ ----
         self.k_energy = k_energy
-        self.swing_sat = swing_sat if swing_sat is not None else 0.9 * p.a_max
+        self.swing_sat = swing_sat if swing_sat is not None else float(cfg.get("swing_sat_ratio", 0.9)) * p.a_max
         self.deadlock_phidot = float(cfg.get("deadlock_phidot_rad_s", 0.08))
         self.deadlock_accel = float(cfg.get("deadlock_accel_mps2", 3.0))
+        self.center_hold_kx = float(cfg.get("center_hold_kx", 8.0))
+        self.center_hold_kd = float(cfg.get("center_hold_kd", 4.0))
+        self.swing_rail_guard_x = float(cfg.get("swing_rail_guard_x_m", 0.0))
+        self.swing_top_brake_phi = float(cfg.get("swing_top_brake_phi_rad", 0.0))
+        self.swing_top_brake_phid = float(cfg.get("swing_top_brake_phidot_rad_s", 0.0))
+        self.swing_top_brake_ratio = float(cfg.get("swing_top_brake_ratio", 0.0))
+        self.lqr_center_kx = float(cfg.get("lqr_center_kx", 0.0))
+        self.lqr_center_kd = float(cfg.get("lqr_center_kd", 0.0))
+        self.catch_phi = float(cfg.get("catch_phi_rad", self.CATCH_PHI))
+        self.catch_phid = float(cfg.get("catch_phidot_rad_s", self.CATCH_PHID))
+        self.release_phi = float(cfg.get("release_phi_rad", self.RELEASE_PHI))
         self.E_bottom = -2.0 * m * G * lc                # 真下静止のエネルギー
         self._m, self._lc, self._J = m, lc, J
         self.mode = "swingup"
@@ -76,14 +92,15 @@ class HybridController:
 
         # ---- モード切替 (ヒステリシス) ----
         if self.mode == "swingup":
-            if abs(phi) < self.CATCH_PHI and abs(phid) < self.CATCH_PHID:
+            if abs(phi) < self.catch_phi and abs(phid) < self.catch_phid:
                 self.mode = "lqr"
         else:
-            if abs(phi) > self.RELEASE_PHI:
+            if abs(phi) > self.release_phi:
                 self.mode = "swingup"
 
         if self.mode == "lqr":
             a = -float(self.K @ np.array([x, xd, phi, phid]))
+            a += -self.lqr_center_kx * x - self.lqr_center_kd * xd
             return float(np.clip(a, -self.p.a_max, self.p.a_max))
 
         # ---- エネルギー法スイングアップ ----
@@ -95,6 +112,16 @@ class HybridController:
             a = self.k_energy * E * pump             # E<0 なので dE/dt >= 0
             if abs(phid) < self.deadlock_phidot and abs(a) < self.deadlock_accel:
                 a = -self.deadlock_accel if phi >= 0.0 else self.deadlock_accel
-        # レール中央維持 (弱め)
-        a += -8.0 * x - 4.0 * xd
+            if (self.swing_top_brake_phi > 0.0
+                    and abs(phi) < self.swing_top_brake_phi
+                    and abs(phid) > self.swing_top_brake_phid
+                    and abs(pump) > 1.0e-6):
+                a = self.swing_top_brake_ratio * self.swing_sat * np.sign(pump)
+        # レール中央維持
+        a += -self.center_hold_kx * x - self.center_hold_kd * xd
+        if self.swing_rail_guard_x > 0.0:
+            if x > self.swing_rail_guard_x and a > 0.0:
+                a = -self.swing_sat
+            elif x < -self.swing_rail_guard_x and a < 0.0:
+                a = self.swing_sat
         return float(np.clip(a, -self.swing_sat, self.swing_sat))

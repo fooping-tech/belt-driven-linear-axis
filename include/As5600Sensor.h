@@ -50,6 +50,7 @@ class As5600Sensor {
   bool readRegister(uint8_t reg, uint8_t* data, size_t length);
   bool readWord(uint8_t reg, uint16_t& value);
   Reading read();
+  Reading readAngleStatus();
   BitBangReading readBitBang();
   uint8_t scanWire(uint8_t* addresses, size_t maxAddresses);
   uint8_t scanBitBang(uint8_t* addresses, size_t maxAddresses);

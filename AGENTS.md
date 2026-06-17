@@ -84,6 +84,16 @@ relevant startup logs and runtime status before finishing. If software logs are
 not enough and an oscilloscope capability is available, use it to measure the
 waveform and troubleshoot the physical signal path.
 
+When running real-hardware experiments, leave a Markdown record under
+`reports/` before finishing. Prefer appending to the existing report for the
+same investigation; otherwise create a new dated report. Record at least:
+
+- The hardware setup and any mechanical/electrical changes.
+- Firmware/config parameters used for the run.
+- Commands executed and the important serial output.
+- Pass/fail result, observed behavior, and stop/fault reason.
+- Diagnosis, parameter changes made, and the next planned experiment.
+
 If the root project was also changed, run `pio run` from the repository root as
 well.
 

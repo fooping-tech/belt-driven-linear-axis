@@ -19,6 +19,7 @@ import mujoco.viewer
 from params import DEFAULT
 from env import BeltCartPoleSim, make_obs
 from classic import HybridController
+from observer import FirmwareObserver
 
 
 class RLController:
@@ -44,6 +45,8 @@ def main():
     ap.add_argument("--rl-model", type=str, default="sac_belt_cartpole.zip")
     ap.add_argument("--duration", type=float, default=60.0, help="[s]")
     ap.add_argument("--headless", action="store_true")
+    ap.add_argument("--firmware-observer", action="store_true",
+                    help="feed the controller AS5600/stepper-style observed state")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
@@ -55,25 +58,30 @@ def main():
         controllers["rl"] = RLController(args.rl_model)
     active = {"name": args.controller}
 
+    observer = FirmwareObserver(p) if args.firmware_observer else None
+
     def controller_step(s):
-        return controllers[active["name"]](s)
+        observed = observer.observe(s, p.ctrl_dt) if observer else s
+        return controllers[active["name"]](observed), observed
 
     # ------------------------------------------------------------------
     if args.headless:
         s = sim.reset(theta0=0.0)
+        observed = observer.reset(s) if observer else s
         n = int(args.duration * p.ctrl_hz)
         upright_time = 0.0
         for _ in range(n):
-            sim.set_accel(controller_step(s))
+            accel, observed = controller_step(s)
+            sim.set_accel(accel)
             s = sim.control_step()
-            if abs(s["phi"]) < 0.2:
+            if abs(observed["phi"]) < 0.2:
                 upright_time += p.ctrl_dt
             if s["stalled"]:
                 print("!! stall detected (指令と実位置が乖離)")
                 break
         print(f"controller={active['name']}  duration={args.duration:.1f}s  "
               f"upright={upright_time:.1f}s  "
-              f"final phi={s['phi']:+.3f} rad  x={s['x']:+.3f} m")
+              f"final phi={observed['phi']:+.3f} rad  x={observed['x']:+.3f} m")
         return
 
     # ------------------------------------------------------------------
@@ -90,13 +98,15 @@ def main():
             print(f"[controller -> {active['name']}]")
 
     s = sim.reset(theta0=0.0)
+    observed = observer.reset(s) if observer else s
     t_end = time.time() + args.duration
     with mujoco.viewer.launch_passive(sim.model, sim.data,
                                       key_callback=key_cb) as viewer:
         last_print = 0.0
         while viewer.is_running() and time.time() < t_end:
             step_start = time.time()
-            sim.set_accel(controller_step(s))
+            accel, observed = controller_step(s)
+            sim.set_accel(accel)
             s = sim.control_step()
             viewer.sync()
 
@@ -104,8 +114,8 @@ def main():
                 last_print = time.time()
                 mode = (controllers["classic"].mode
                         if active["name"] == "classic" else "policy")
-                print(f"[{active['name']}/{mode}] phi={s['phi']:+.2f} rad  "
-                      f"x={s['x']:+.3f} m  v_cmd={s['cmd_vel']:+.2f} m/s"
+                print(f"[{active['name']}/{mode}] phi={observed['phi']:+.2f} rad  "
+                      f"x={observed['x']:+.3f} m  v_cmd={s['cmd_vel']:+.2f} m/s"
                       + ("  STALL!" if s["stalled"] else ""))
 
             # 実時間同期

@@ -8,6 +8,8 @@ constexpr float kTwoPi = 2.0F * kPi;
 constexpr float kDegToRad = kPi / 180.0F;
 constexpr float kGravity = 9.81F;
 constexpr float kMinStepSpeedMps = 0.0005F;
+constexpr float kMaxAbsMeasuredPhidotRadS = 15.0F;
+constexpr uint8_t kMaxConsecutiveSensorFaults = 3;
 }
 
 CartPoleBalanceController::CartPoleBalanceController(Axis& axis, As5600Sensor& angleSensor)
@@ -38,12 +40,13 @@ bool CartPoleBalanceController::start() {
   mode_ = Mode::Swingup;
   stopReason_ = StopReason::None;
   filteredPhidotRadS_ = 0.0F;
+  sensorFaultCount_ = 0;
   cmdVelMps_ = 0.0F;
   lastAccelMps2_ = 0.0F;
   cmdPosM_ = (axis_.currentPositionMm() - BeltCartpoleConfig::kRealXCenterMm) / 1000.0F;
   lastXM_ = cmdPosM_;
   const float thetaRad = wrapPi(BeltCartpoleConfig::kRealAngleDirection
-                                * wrapDeg(reading.angleDegrees - angleDownDeg_) * kDegToRad);
+                                * wrapDeg(reading.rawDegrees - angleDownDeg_) * kDegToRad);
   lastThetaRad_ = thetaRad;
   const uint32_t nowUs = micros();
   lastControlUs_ = nowUs;
@@ -83,9 +86,12 @@ void CartPoleBalanceController::update() {
     lastControlUs_ = nowUs;
     Observation obs = readObservation(elapsedS);
     if (!obs.ok) {
-      stop(StopReason::SensorFault);
+      if (++sensorFaultCount_ >= kMaxConsecutiveSensorFaults) {
+        stop(StopReason::SensorFault);
+      }
       return;
     }
+    sensorFaultCount_ = 0;
 
     const float accel = computeAccel(obs);
     integrateCommand(accel, elapsedS);
@@ -228,15 +234,17 @@ float CartPoleBalanceController::energy(float phiRad, float phidotRadS) const {
 
 CartPoleBalanceController::Observation CartPoleBalanceController::readObservation(float dtS) {
   Observation obs;
-  const As5600Sensor::Reading reading = angleSensor_.read();
+  const As5600Sensor::Reading reading = angleSensor_.readAngleStatus();
   if (!reading.ok || !As5600Sensor::magnetDetected(reading.status)) {
     return obs;
   }
 
   obs.thetaRad = wrapPi(BeltCartpoleConfig::kRealAngleDirection
-                        * wrapDeg(reading.angleDegrees - angleDownDeg_) * kDegToRad);
+                        * wrapDeg(reading.rawDegrees - angleDownDeg_) * kDegToRad);
   obs.phiRad = wrapPi(obs.thetaRad - kPi);
-  const float rawPhidot = wrapPi(obs.thetaRad - lastThetaRad_) / dtS;
+  const float rawPhidot = clip(wrapPi(obs.thetaRad - lastThetaRad_) / dtS,
+                               -kMaxAbsMeasuredPhidotRadS,
+                               kMaxAbsMeasuredPhidotRadS);
   filteredPhidotRadS_ += BeltCartpoleConfig::kAngleFilterAlpha * (rawPhidot - filteredPhidotRadS_);
   obs.phidotRadS = filteredPhidotRadS_;
   lastThetaRad_ = obs.thetaRad;
@@ -264,7 +272,10 @@ float CartPoleBalanceController::computeAccel(const Observation& obs) {
                           + BeltCartpoleConfig::kLqrKxd * obs.xdotMps
                           + BeltCartpoleConfig::kLqrKphi * obs.phiRad
                           + BeltCartpoleConfig::kLqrKphid * obs.phidotRadS);
-    return clip(accel, -BeltCartpoleConfig::kAMaxMps2, BeltCartpoleConfig::kAMaxMps2);
+    const float centeredAccel = accel
+                                - BeltCartpoleConfig::kLqrCenterKx * obs.xM
+                                - BeltCartpoleConfig::kLqrCenterKd * obs.xdotMps;
+    return clip(centeredAccel, -BeltCartpoleConfig::kAMaxMps2, BeltCartpoleConfig::kAMaxMps2);
   }
 
   const float e = energy(obs.phiRad, obs.phidotRadS);
@@ -274,16 +285,30 @@ float CartPoleBalanceController::computeAccel(const Observation& obs) {
   if (fabsf(e - eBottom) < 0.02F * fabsf(eBottom) && fabsf(obs.phidotRadS) < 0.2F) {
     accel = swingSat;
   } else {
-    accel = BeltCartpoleConfig::kKEnergy * e * obs.phidotRadS * cosf(obs.phiRad);
+    const float pump = obs.phidotRadS * cosf(obs.phiRad);
+    accel = BeltCartpoleConfig::kKEnergy * e * pump;
     if (fabsf(obs.phidotRadS) < BeltCartpoleConfig::kDeadlockPhidotRadS
         && fabsf(accel) < BeltCartpoleConfig::kDeadlockAccelMps2) {
       accel = obs.phiRad >= 0.0F
                   ? -BeltCartpoleConfig::kDeadlockAccelMps2
                   : BeltCartpoleConfig::kDeadlockAccelMps2;
     }
+    if (BeltCartpoleConfig::kSwingTopBrakePhiRad > 0.0F
+        && fabsf(obs.phiRad) < BeltCartpoleConfig::kSwingTopBrakePhiRad
+        && fabsf(obs.phidotRadS) > BeltCartpoleConfig::kSwingTopBrakePhidotRadS
+        && fabsf(pump) > 1.0e-6F) {
+      accel = BeltCartpoleConfig::kSwingTopBrakeRatio * swingSat * (pump >= 0.0F ? 1.0F : -1.0F);
+    }
   }
   accel += -BeltCartpoleConfig::kCenterHoldKx * obs.xM
            - BeltCartpoleConfig::kCenterHoldKd * obs.xdotMps;
+  if (BeltCartpoleConfig::kSwingRailGuardXM > 0.0F) {
+    if (obs.xM > BeltCartpoleConfig::kSwingRailGuardXM && accel > 0.0F) {
+      accel = -swingSat;
+    } else if (obs.xM < -BeltCartpoleConfig::kSwingRailGuardXM && accel < 0.0F) {
+      accel = swingSat;
+    }
+  }
   return clip(accel, -swingSat, swingSat);
 }
 

@@ -14,6 +14,12 @@
 #endif
 
 namespace {
+constexpr float kPi = 3.14159265358979323846F;
+constexpr float kDegToRad = kPi / 180.0F;
+constexpr float kRadToDeg = 180.0F / kPi;
+constexpr uint8_t kBalanceZeroSamples = 9;
+constexpr uint16_t kBalanceZeroSampleDelayMs = 20;
+
 const HomingConfig kHomingConfig = {
     HOMING_DIRECTION,
     HOMING_FAST_MM_S,
@@ -54,7 +60,7 @@ TMC2209Stepper TmcDriver(&TmcSerial, TMC_R_SENSE, TMC_DRIVER_ADDRESS);
 bool tmcUartOk = false;
 uint8_t tmcUartAddress = TMC_DRIVER_ADDRESS;
 uint16_t tmcRuntimeRmsCurrentMa = TMC_RMS_CURRENT_MA;
-bool tmcSpreadCycle = false;
+bool tmcSpreadCycle = BeltCartpoleConfig::kBalanceSpreadCycle;
 uint8_t tmcConfiguredIrun = 0;
 uint8_t tmcConfiguredIhold = 0;
 float tmcConfiguredRunRmsMa = 0.0F;
@@ -1966,12 +1972,32 @@ void AppController::calibrateBalanceDownAngle() {
     Serial.printf("BALANCE_ZERO,rejected=1,reason=busy,state=%s\n", stateName());
     return;
   }
-  const As5600Sensor::Reading reading = as5600_.read();
-  if (!reading.ok) {
+
+  float sinSum = 0.0F;
+  float cosSum = 0.0F;
+  uint8_t validSamples = 0;
+  for (uint8_t sample = 0; sample < kBalanceZeroSamples; ++sample) {
+    const As5600Sensor::Reading reading = as5600_.readAngleStatus();
+    if (reading.ok && reading.statusOk && As5600Sensor::magnetDetected(reading.status)) {
+      const float angleRad = reading.rawDegrees * kDegToRad;
+      sinSum += sinf(angleRad);
+      cosSum += cosf(angleRad);
+      ++validSamples;
+    }
+    delay(kBalanceZeroSampleDelayMs);
+  }
+
+  if (validSamples < (kBalanceZeroSamples + 1U) / 2U) {
     Serial.println("BALANCE_ZERO,rejected=1,reason=as5600_read_failed");
     return;
   }
-  balance_.calibrateDownAngle(reading.angleDegrees);
+
+  float meanDeg = atan2f(sinSum, cosSum) * kRadToDeg;
+  if (meanDeg < 0.0F) {
+    meanDeg += 360.0F;
+  }
+  balance_.calibrateDownAngle(meanDeg);
+  Serial.printf("BALANCE_ZERO,samples=%u,source=raw_angle\n", validSamples);
 }
 
 void AppController::printBalanceStatus() {

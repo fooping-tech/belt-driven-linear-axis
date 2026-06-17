@@ -34,6 +34,8 @@ class Params:
     # ---------- ステッパ駆動の運動制限 (sim2real の核) ----------
     v_max: float = 0.7                             # [m/s]  (~1050 rpm 相当)
     a_max: float = 15.0                            # [m/s^2]
+    issued_v_max: float = 0.7                      # [m/s] 発行済みSTEP位置の実効追従速度
+    issued_step_m: float = 0.000025                # [m] 1 step相当 (1/8 microstep, 40 steps/mm)
     stall_threshold: float = 0.004                 # [m] 指令-実位置乖離→脱調と判定
 
     # ---------- ステージ / 振子 ----------
@@ -114,6 +116,8 @@ def params_from_shared_config() -> Params:
         rotor_inertia=float(motor["rotor_inertia_kg_m2"]),
         v_max=float(limits["v_max_mps"]),
         a_max=float(limits["a_max_mps2"]),
+        issued_v_max=float(limits.get("issued_v_max_mps", limits["v_max_mps"])),
+        issued_step_m=float(limits.get("issued_step_m", 0.000025)),
         stall_threshold=float(limits["stall_threshold_m"]),
         cart_mass=float(stage["cart_mass_kg"]),
         pole_len=float(stage["pole_len_m"]),

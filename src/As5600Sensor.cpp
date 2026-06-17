@@ -64,6 +64,18 @@ As5600Sensor::Reading As5600Sensor::read() {
   return reading;
 }
 
+As5600Sensor::Reading As5600Sensor::readAngleStatus() {
+  Reading reading;
+  reading.statusOk = readRegister(kStatusRegister, &reading.status, 1);
+  reading.rawOk = readWord(kRawAngleRegister, reading.rawAngle);
+  reading.angleOk = reading.rawOk;
+  reading.angle = reading.rawAngle;
+  reading.ok = reading.statusOk && reading.rawOk;
+  reading.rawDegrees = reading.rawOk ? countsToDegrees(reading.rawAngle) : 0.0F;
+  reading.angleDegrees = reading.rawDegrees;
+  return reading;
+}
+
 As5600Sensor::BitBangReading As5600Sensor::readBitBang() {
   Wire.end();
   bitBangRelease(sclPin_);

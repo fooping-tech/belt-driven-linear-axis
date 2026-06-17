@@ -75,6 +75,7 @@ class CartPoleBalanceController {
   float cmdPosM_ = 0.0F;
   float cmdVelMps_ = 0.0F;
   float lastAccelMps2_ = 0.0F;
+  uint8_t sensorFaultCount_ = 0;
   uint32_t lastControlUs_ = 0;
   uint32_t lastStepUs_ = 0;
   uint32_t lastLogMs_ = 0;
